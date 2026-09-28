@@ -33,10 +33,14 @@ const TASK_TYPE_CAPACITACION = 2852135; // Capacitación
 const USER_CRISTINA = 7306169;
 const USER_IVAN = 10095483;
 
+// Mapeo opcional de IDs de usuario de GoHighLevel (GHL) -> Kommo
+const GHL_USER_MAP = {};
+
 // Etiqueta oficial
 const TAG_CITA_AGENDADA = 'Cita Agendada';
 
-// Cache en memoria para descartar webhooks duplicados casi simultáneos
+// Almacenamiento en memoria para depuración y descarte de duplicados
+let lastWebhookReceived = null;
 const recentlyProcessed = new Map();
 
 // Función auxiliar para pausas (sleep)
@@ -56,7 +60,8 @@ module.exports = async (req, res) => {
     return res.status(200).json({
       status: 'ok',
       message: 'Middleware GHL ⇄ Kommo CRM (1A Soluciones Virtuales) activo.',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      lastWebhook: req.query.debug === '1' ? lastWebhookReceived : undefined
     });
   }
 
@@ -66,6 +71,11 @@ module.exports = async (req, res) => {
 
   try {
     const payload = req.body || {};
+    lastWebhookReceived = {
+      receivedAt: new Date().toISOString(),
+      headers: req.headers,
+      body: payload
+    };
     console.log('Incoming GHL Webhook:', JSON.stringify(payload));
 
     const contactData = extractContactData(payload);
@@ -91,7 +101,7 @@ module.exports = async (req, res) => {
     const calendarConfig = classifyCalendar(payload, appointmentData);
     console.log('Configuración detectada para la cita:', calendarConfig);
 
-    // Sincronizar en Kommo en 2 pasos para garantizar disponibilidad de campos antes del bot
+    // Sincronizar en Kommo garantizando disponibilidad de campos antes del bot
     const syncResult = await syncAppointmentWithKommo(contactData, appointmentData, calendarConfig);
 
     return res.status(200).json({
@@ -153,7 +163,7 @@ function classifyCalendar(payload, appointmentData) {
       enumCitaId: ENUM_VENTA_60MIN,
       taskTypeId: TASK_TYPE_DEMO_KOMMO,
       taskTitle: 'Demo Kommo - Cita Venta Reprogramada',
-      assignedUserId: determineAssignedAdvisor(fullText)
+      assignedUserId: determineAssignedAdvisor(payload, fullText)
     };
   }
 
@@ -167,7 +177,7 @@ function classifyCalendar(payload, appointmentData) {
       enumCitaId: ENUM_VENTA_60MIN,
       taskTypeId: TASK_TYPE_DEMO_KOMMO,
       taskTitle: 'Demo Kommo - Embudo Gamificado',
-      assignedUserId: determineAssignedAdvisor(fullText)
+      assignedUserId: determineAssignedAdvisor(payload, fullText)
     };
   }
 
@@ -181,7 +191,7 @@ function classifyCalendar(payload, appointmentData) {
       enumCitaId: ENUM_VENTA_60MIN,
       taskTypeId: TASK_TYPE_DEMO_KOMMO,
       taskTitle: 'Demo Kommo - Cita Diagnóstico Venta',
-      assignedUserId: determineAssignedAdvisor(fullText)
+      assignedUserId: determineAssignedAdvisor(payload, fullText)
     };
   }
 
@@ -262,6 +272,7 @@ function classifyCalendar(payload, appointmentData) {
     };
   }
 
+  // Por defecto: Ventas CRM
   return {
     scenario: 'ventas',
     pipelineId: PIPELINE_VENTAS_ID,
@@ -270,14 +281,72 @@ function classifyCalendar(payload, appointmentData) {
     enumCitaId: ENUM_VENTA_60MIN,
     taskTypeId: TASK_TYPE_DEMO_KOMMO,
     taskTitle: 'Demo Kommo - Cita de Venta',
-    assignedUserId: determineAssignedAdvisor(fullText)
+    assignedUserId: determineAssignedAdvisor(payload, fullText)
   };
 }
 
-function determineAssignedAdvisor(fullText) {
-  if (fullText.includes('ivan') || fullText.includes('ivan.lalinde')) {
+/**
+ * Determina el asesor asignado buscando por nombre (con o sin tilde), apellido, email o ID de GHL
+ */
+function determineAssignedAdvisor(payload, fullText) {
+  const candidates = [];
+
+  if (payload.assigned_user_id) candidates.push(payload.assigned_user_id);
+  if (payload.assignedUserId) candidates.push(payload.assignedUserId);
+  if (payload.userId) candidates.push(payload.userId);
+  if (payload.user_id) candidates.push(payload.user_id);
+  if (payload.staff_id) candidates.push(payload.staff_id);
+
+  const appt = payload.appointment || payload.calendar || {};
+  if (appt.assigned_user_id) candidates.push(appt.assigned_user_id);
+  if (appt.assignedUserId) candidates.push(appt.assignedUserId);
+  if (appt.userId) candidates.push(appt.userId);
+  if (appt.user_id) candidates.push(appt.user_id);
+  if (appt.staffId) candidates.push(appt.staffId);
+  if (appt.selectedUser) candidates.push(appt.selectedUser);
+  if (Array.isArray(appt.users)) {
+    appt.users.forEach(u => candidates.push(typeof u === 'string' ? u : (u.id || u.email || u.name)));
+  }
+
+  const userObj = payload.user || {};
+  if (userObj.id) candidates.push(userObj.id);
+  if (userObj.name) candidates.push(userObj.name);
+  if (userObj.email) candidates.push(userObj.email);
+
+  // 1. Revisar si coincide con algún ID directo en GHL_USER_MAP
+  for (const c of candidates) {
+    if (GHL_USER_MAP[c]) return GHL_USER_MAP[c];
+  }
+
+  // 2. Normalizar candidates y fullText eliminando tildes y diacríticos (ej. Iván -> ivan)
+  const normalizedText = (fullText + ' ' + candidates.join(' '))
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  // 3. Comprobar si corresponde a Iván Lalinde
+  if (
+    normalizedText.includes('ivan') ||
+    normalizedText.includes('lalinde') ||
+    normalizedText.includes('ivan.lalinde') ||
+    normalizedText.includes('ivan.lalinde@1asolucionesvirtuales.com')
+  ) {
+    console.log('Asesor detectado: Ivan Lalinde');
     return USER_IVAN;
   }
+
+  // 4. Comprobar si corresponde a Cristina Orozco
+  if (
+    normalizedText.includes('cristina') ||
+    normalizedText.includes('orozco') ||
+    normalizedText.includes('consultas@1asolucionesvirtuales.com')
+  ) {
+    console.log('Asesor detectado: Cristina Orozco');
+    return USER_CRISTINA;
+  }
+
+  // Por defecto, asignar a Cristina Orozco
+  console.log('Asesor no identificado explícitamente. Se asigna a Cristina Orozco por defecto.');
   return USER_CRISTINA;
 }
 
@@ -308,13 +377,7 @@ function extractAppointmentData(payload) {
   const id = appt.id || payload.appointment_id || '';
 
   let startTimeRaw = appt.start_time || appt.startTime || payload.start_time || payload.selected_time || payload.date;
-  let startTimeUnix = Math.floor(Date.now() / 1000);
-  if (startTimeRaw) {
-    const parsedDate = new Date(startTimeRaw);
-    if (!isNaN(parsedDate.getTime())) {
-      startTimeUnix = Math.floor(parsedDate.getTime() / 1000);
-    }
-  }
+  let startTimeUnix = parseAppointmentTimestamp(startTimeRaw);
 
   let meetingLink = appt.address || appt.meeting_location || appt.meetingLocation || payload.meeting_location || payload.zoom_link || '';
   if (!meetingLink && (typeof payload.location === 'string' && payload.location.startsWith('http'))) {
@@ -327,6 +390,56 @@ function extractAppointmentData(payload) {
   }
 
   return { id, startTimeUnix, meetingLink, notes };
+}
+
+/**
+ * Parsea la fecha de la cita garantizando que la hora elegida (ej. 9:00 AM)
+ * corresponda exactamente a la hora local en Colombia (America/Bogota, UTC-5)
+ */
+function parseAppointmentTimestamp(rawDateStr) {
+  if (!rawDateStr) return Math.floor(Date.now() / 1000);
+
+  if (typeof rawDateStr === 'number') {
+    return rawDateStr > 1e11 ? Math.floor(rawDateStr / 1000) : rawDateStr;
+  }
+
+  const str = String(rawDateStr).trim();
+
+  // Capturar fecha y hora: YYYY-MM-DDTHH:mm:ss o YYYY-MM-DD HH:mm:ss
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(.*)?$/);
+  if (match) {
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10) - 1; // Base 0
+    const day = parseInt(match[3], 10);
+    const hour = parseInt(match[4], 10);
+    const min = parseInt(match[5], 10);
+    const sec = parseInt(match[6] || '0', 10);
+    const tzPart = (match[7] || '').trim();
+
+    // Si viene con un offset explícito diferente de UTC/Z (ej: -05:00)
+    const offsetMatch = tzPart.match(/^([+-])(\d{2}):?(\d{2})?$/);
+    if (offsetMatch && !(offsetMatch[1] === '+' && offsetMatch[2] === '00')) {
+      const sign = offsetMatch[1] === '+' ? 1 : -1;
+      const offHours = parseInt(offsetMatch[2], 10);
+      const offMins = parseInt(offsetMatch[3] || '0', 10);
+      const totalOffsetMs = sign * (offHours * 60 + offMins) * 60 * 1000;
+      const localUtc = Date.UTC(year, month, day, hour, min, sec);
+      return Math.floor((localUtc - totalOffsetMs) / 1000);
+    }
+
+    // Si viene sin offset o con 'Z' (cuando el servidor o GHL envía la hora local con 'Z'):
+    // La hora seleccionada (ej. 9:00 AM) es la hora en Colombia (America/Bogota, UTC-5).
+    // Para que Kommo muestre exactamente 09:00 AM, el timestamp UTC debe ser (hour + 5).
+    const bogotaUtcMs = Date.UTC(year, month, day, hour + 5, min, sec);
+    return Math.floor(bogotaUtcMs / 1000);
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    return Math.floor(parsed.getTime() / 1000);
+  }
+
+  return Math.floor(Date.now() / 1000);
 }
 
 /**
@@ -347,6 +460,7 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   } else {
     console.log(`Contacto encontrado en Kommo: [${contact.id}] ${contact.name}`);
     if (contact.responsible_user_id !== config.assignedUserId) {
+      console.log(`Actualizando responsable del contacto [${contact.id}] a [${config.assignedUserId}]...`);
       await updateEntityResponsible('contacts', contact.id, config.assignedUserId, headers);
     }
   }
@@ -393,9 +507,9 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
 
   if (targetLead) {
     leadId = targetLead.id;
-    console.log(`[PASO 1] Guardando campos personalizados en Lead [${leadId}]...`);
+    console.log(`[PASO 1] Guardando campos personalizados en Lead activo [${leadId}]...`);
 
-    // PASO 1: Guardar primero los campos personalizados, etiquetas y asesor
+    // PASO 1: Guardar primero los campos personalizados, etiquetas y asesor responsable
     const saveFieldsPayload = {
       responsible_user_id: config.assignedUserId,
       custom_fields_values: customFieldsValues,
@@ -428,9 +542,9 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     }
 
   } else {
-    console.log(`No se encontró Lead en el embudo [${config.pipelineId}]. Creando nuevo Lead...`);
+    console.log(`No se encontró Lead activo en el embudo [${config.pipelineId}] para el contacto [${contactId}]. Creando nuevo Lead...`);
 
-    // Crear lead con todos los campos ya diligenciados
+    // Crear nuevo lead con todos los campos ya diligenciados
     const createPayload = {
       name: `Cita: ${contactData.name}`,
       pipeline_id: config.pipelineId,
@@ -452,6 +566,7 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
 
     const createData = await createRes.json();
     leadId = createData._embedded?.leads?.[0]?.id;
+    console.log(`Nuevo Lead creado en Kommo: [${leadId}]`);
   }
 
   // 4. Crear la Tarea correspondiente en Kommo
@@ -464,34 +579,63 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
 
   // 5. Dejar una Nota informativa en el Lead
   const formattedDate = new Date(timestampCita * 1000).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
-  const noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Notas del cliente: ${appointmentData.notes || 'Ninguna'}`;
+  const noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• Notas del cliente: ${appointmentData.notes || 'Ninguna'}`;
   await addNote(leadId, noteContent, headers);
 
   return {
     contactId,
     leadId,
+    assignedUserId: config.assignedUserId,
     scenario: config.scenario,
     appointmentTime: formattedDate
   };
 }
 
+/**
+ * Busca contacto por teléfono (múltiples variantes con prefijo internacional) o por correo electrónico
+ */
 async function searchContact(phone, email, headers) {
   if (phone) {
-    const cleanPhone = phone.replace(/[^\d]/g, '');
-    const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts?query=${cleanPhone}`;
-    const res = await fetch(url, { headers });
-    if (res.ok) {
-      const data = await res.json();
-      if (data._embedded?.contacts?.length > 0) return data._embedded.contacts[0];
+    const cleanDigits = phone.replace(/[^\d]/g, '');
+    const phoneQueries = [cleanDigits];
+
+    // Si es un número colombiano de 10 dígitos (ej. 3133931654)
+    if (cleanDigits.length === 10 && cleanDigits.startsWith('3')) {
+      phoneQueries.push(`+57${cleanDigits}`);
+      phoneQueries.push(`57${cleanDigits}`);
+    } else if (cleanDigits.startsWith('57') && cleanDigits.length === 12) {
+      phoneQueries.push(`+${cleanDigits}`);
+      phoneQueries.push(cleanDigits.substring(2));
+    }
+
+    for (const q of phoneQueries) {
+      try {
+        const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts?query=${encodeURIComponent(q)}`;
+        const res = await fetch(url, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          if (data._embedded?.contacts?.length > 0) {
+            return data._embedded.contacts[0];
+          }
+        }
+      } catch (err) {
+        console.warn(`Error buscando contacto con teléfono ${q}:`, err.message);
+      }
     }
   }
 
   if (email) {
-    const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts?query=${encodeURIComponent(email)}`;
-    const res = await fetch(url, { headers });
-    if (res.ok) {
-      const data = await res.json();
-      if (data._embedded?.contacts?.length > 0) return data._embedded.contacts[0];
+    try {
+      const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts?query=${encodeURIComponent(email)}`;
+      const res = await fetch(url, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data._embedded?.contacts?.length > 0) {
+          return data._embedded.contacts[0];
+        }
+      }
+    } catch (err) {
+      console.warn(`Error buscando contacto con email ${email}:`, err.message);
     }
   }
 
@@ -543,20 +687,47 @@ async function updateEntityResponsible(entityType, entityId, responsibleUserId, 
   }
 }
 
+/**
+ * Busca si el contacto tiene un Lead ACTIVO en el pipeline indicado
+ * Evita retornar leads de otros contactos o leads cerrados/ganados/perdidos
+ */
 async function findLeadForContact(contactId, pipelineId, headers) {
   try {
-    const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads?filter[contacts][id]=${contactId}&with=contacts`;
-    const res = await fetch(url, { headers });
-    if (!res.ok) return null;
+    // 1. Obtener leads asociados al contacto específico
+    const contactUrl = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts/${contactId}?with=leads`;
+    const contactRes = await fetch(contactUrl, { headers });
+    if (!contactRes.ok) return null;
 
-    const data = await res.json();
-    const leads = data._embedded?.leads || [];
+    const contactData = await contactRes.json();
+    const contactLeads = contactData._embedded?.leads || [];
+    if (contactLeads.length === 0) return null;
 
-    const matchingLead = leads.find(l => l.pipeline_id === pipelineId);
-    if (matchingLead) return matchingLead;
+    // 2. Consultar únicamente los leads vinculados a este contacto
+    const leadIds = contactLeads.map(l => l.id);
+    const filterQuery = leadIds.map(id => `filter[id][]=${id}`).join('&');
+    const leadsUrl = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads?${filterQuery}&with=contacts`;
+    const leadsRes = await fetch(leadsUrl, { headers });
+    if (!leadsRes.ok) return null;
 
-    return leads[0] || null;
+    const leadsData = await leadsRes.json();
+    const leads = leadsData._embedded?.leads || [];
+
+    // 3. Buscar lead activo en el pipeline (que no esté cerrado ni en pérdida)
+    const activeLead = leads.find(l =>
+      l.pipeline_id === pipelineId &&
+      l.status_id !== 142 && // No ganado
+      l.status_id !== 143    // No perdido
+    );
+
+    if (activeLead) {
+      console.log(`Lead activo encontrado para contacto [${contactId}]: [${activeLead.id}] ${activeLead.name}`);
+      return activeLead;
+    }
+
+    console.log(`Contacto [${contactId}] no tiene leads activos en pipeline [${pipelineId}].`);
+    return null;
   } catch (e) {
+    console.error('Error buscando lead para contacto:', e);
     return null;
   }
 }
@@ -578,7 +749,7 @@ async function createTask(leadId, responsibleUserId, taskTypeId, dueTimestamp, t
         }
       ])
     });
-    console.log(`Tarea [${taskTypeId}] creada en lead ${leadId} para el usuario ${responsibleUserId}`);
+    console.log(`Tarea [${taskTypeId}] creada en lead ${leadId} para el asesor ${responsibleUserId}`);
   } catch (e) {
     console.error('Error creando tarea en Kommo:', e);
   }
