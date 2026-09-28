@@ -286,67 +286,99 @@ function classifyCalendar(payload, appointmentData) {
 }
 
 /**
- * Determina el asesor asignado buscando por nombre (con o sin tilde), apellido, email o ID de GHL
+ * Determina el asesor asignado buscando en Custom Data de GHL o campos de staff de la cita
+ * (Evita buscar en el texto completo para no confundir el nombre del cliente con el asesor)
  */
 function determineAssignedAdvisor(payload, fullText) {
-  const candidates = [];
-
-  if (payload.assigned_user_id) candidates.push(payload.assigned_user_id);
-  if (payload.assignedUserId) candidates.push(payload.assignedUserId);
-  if (payload.userId) candidates.push(payload.userId);
-  if (payload.user_id) candidates.push(payload.user_id);
-  if (payload.staff_id) candidates.push(payload.staff_id);
+  // 1. Extraer posibles valores del asesor de Custom Data y campos específicos de staff/cita
+  const customData = payload.customData || {};
+  const customDataValues = Object.entries(customData)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(' ');
 
   const appt = payload.appointment || payload.calendar || {};
-  if (appt.assigned_user_id) candidates.push(appt.assigned_user_id);
-  if (appt.assignedUserId) candidates.push(appt.assignedUserId);
-  if (appt.userId) candidates.push(appt.userId);
-  if (appt.user_id) candidates.push(appt.user_id);
-  if (appt.staffId) candidates.push(appt.staffId);
-  if (appt.selectedUser) candidates.push(appt.selectedUser);
+  const userObj = payload.user || {};
+
+  const candidates = [
+    customDataValues,
+    payload.assigned_user,
+    payload.assigned_user_name,
+    payload.assigned_user_email,
+    payload.assigned_user_id,
+    payload.assignedUserId,
+    payload.userId,
+    payload.user_id,
+    payload.staff_id,
+    payload.staff_name,
+    payload.staff_email,
+    appt.assigned_user,
+    appt.assigned_user_name,
+    appt.assigned_user_email,
+    appt.assigned_user_id,
+    appt.assignedUserId,
+    appt.userId,
+    appt.user_id,
+    appt.staffId,
+    appt.selectedUser,
+    userObj.id,
+    userObj.name,
+    userObj.email
+  ];
+
   if (Array.isArray(appt.users)) {
     appt.users.forEach(u => candidates.push(typeof u === 'string' ? u : (u.id || u.email || u.name)));
   }
 
-  const userObj = payload.user || {};
-  if (userObj.id) candidates.push(userObj.id);
-  if (userObj.name) candidates.push(userObj.name);
-  if (userObj.email) candidates.push(userObj.email);
-
-  // 1. Revisar si coincide con algún ID directo en GHL_USER_MAP
+  // 1.1 Revisar mapa directo de IDs de GHL si se configuró
   for (const c of candidates) {
-    if (GHL_USER_MAP[c]) return GHL_USER_MAP[c];
+    if (c && GHL_USER_MAP[String(c)]) return GHL_USER_MAP[String(c)];
   }
 
-  // 2. Normalizar candidates y fullText eliminando tildes y diacríticos (ej. Iván -> ivan)
-  const normalizedText = (fullText + ' ' + candidates.join(' '))
+  // 1.2 Normalizar texto de los candidatos quitando tildes (ej. Iván -> ivan)
+  const advisorText = candidates
+    .filter(Boolean)
+    .join(' ')
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 
-  // 3. Comprobar si corresponde a Iván Lalinde
+  // Comprobar si los datos de la cita/Custom Data señalan a Iván Lalinde
   if (
-    normalizedText.includes('ivan') ||
-    normalizedText.includes('lalinde') ||
-    normalizedText.includes('ivan.lalinde') ||
-    normalizedText.includes('ivan.lalinde@1asolucionesvirtuales.com')
+    advisorText.includes('ivan') ||
+    advisorText.includes('lalinde') ||
+    advisorText.includes('ivan.lalinde') ||
+    advisorText.includes('ivan.lalinde@1asolucionesvirtuales.com')
   ) {
-    console.log('Asesor detectado: Ivan Lalinde');
+    console.log('Asesor detectado por Custom Data / Staff: Iván Lalinde');
     return USER_IVAN;
   }
 
-  // 4. Comprobar si corresponde a Cristina Orozco
+  // Comprobar si los datos de la cita/Custom Data señalan a Cristina Orozco
   if (
-    normalizedText.includes('cristina') ||
-    normalizedText.includes('orozco') ||
-    normalizedText.includes('consultas@1asolucionesvirtuales.com')
+    advisorText.includes('cristina') ||
+    advisorText.includes('consultas@1asolucionesvirtuales.com')
   ) {
-    console.log('Asesor detectado: Cristina Orozco');
+    console.log('Asesor detectado por Custom Data / Staff: Cristina Orozco');
     return USER_CRISTINA;
   }
 
-  // Por defecto, asignar a Cristina Orozco
-  console.log('Asesor no identificado explícitamente. Se asigna a Cristina Orozco por defecto.');
+  // 2. Si no vino en Custom Data ni campos de staff, revisar si el nombre del calendario especifica asesor
+  const calendarIdentifier = ((appt.calendarName || '') + ' ' + (appt.id || ''))
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (calendarIdentifier.includes('ivan') || calendarIdentifier.includes('lalinde') || calendarIdentifier.includes('-il-')) {
+    console.log('Asesor detectado por nombre de calendario: Iván Lalinde');
+    return USER_IVAN;
+  }
+  if (calendarIdentifier.includes('cris') || calendarIdentifier.includes('-co-')) {
+    console.log('Asesor detectado por nombre de calendario: Cristina Orozco');
+    return USER_CRISTINA;
+  }
+
+  // Por defecto (en agendas de distribución aleatoria donde aún no se mapeó Custom Data en GHL)
+  console.log('Asesor no encontrado en Custom Data ni calendario. Se asigna Cristina Orozco por defecto.');
   return USER_CRISTINA;
 }
 
