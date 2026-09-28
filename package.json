@@ -1,0 +1,7 @@
+{
+  "name": "integracion-ghl-kommo",
+  "version": "1.0.0",
+  "description": "Middleware para sincronizar citas de GoHighLevel (GHL) con Kommo CRM (1A Soluciones Virtuales)",
+  "main": "api/webhook.js",
+  "dependencies": {}
+}
