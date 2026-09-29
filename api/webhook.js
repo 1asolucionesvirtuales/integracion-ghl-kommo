@@ -17,6 +17,7 @@ const FIELD_ENLACE_SALA = 1043530; // url
 const FIELD_CITAS_SEGUIMIENTO = 1038738; // date_time
 const FIELD_SEGUNDO_RECORDATORIO = 1046715; // date_time
 const FIELD_SEGUIMIENTO_O_CITA = 1046709; // select
+const FIELD_ID_CITA_GHL = 1054302; // text (ID Cita GHL)
 
 // Opciones de "Seguimiento o Cita?"
 const ENUM_VENTA_60MIN = 611285; // Reunión 60 min - Venta
@@ -36,8 +37,132 @@ const USER_IVAN = 10095483;
 // Mapeo opcional de IDs de usuario de GoHighLevel (GHL) -> Kommo
 const GHL_USER_MAP = {};
 
-// Etiqueta oficial
-const TAG_CITA_AGENDADA = 'Cita Agendada';
+// Etiqueta oficial de cita agendada
+const TAG_CITA_AGENDADA = 'Cita agendada';
+
+// Mapeo oficial de indicativos telefónicos a nombres de etiquetas de país en Kommo
+const DIALING_CODE_TO_COUNTRY = [
+  // 4 dígitos
+  { prefix: '+1809', country: 'Rep Dominicana' },
+  { prefix: '+1829', country: 'Rep Dominicana' },
+  { prefix: '+1849', country: 'Rep Dominicana' },
+  { prefix: '+1787', country: 'Puerto Rico' },
+  { prefix: '+1939', country: 'Puerto Rico' },
+  // 3 dígitos
+  { prefix: '+507', country: 'Panama' },
+  { prefix: '+593', country: 'Ecuador' },
+  { prefix: '+506', country: 'Costa Rica' },
+  { prefix: '+502', country: 'Guatemala' },
+  { prefix: '+503', country: 'El Salvador' },
+  { prefix: '+504', country: 'Honduras' },
+  { prefix: '+505', country: 'Nicaragua' },
+  { prefix: '+591', country: 'Bolivia' },
+  { prefix: '+595', country: 'Paraguay' },
+  { prefix: '+598', country: 'Uruguay' },
+  { prefix: '+599', country: 'Curazao' },
+  { prefix: '+240', country: 'Guinea Ecuatorial' },
+  { prefix: '+212', country: 'Marruecos' },
+  { prefix: '+351', country: 'Portugal' },
+  // 2 dígitos
+  { prefix: '+57', country: 'Colombia' },
+  { prefix: '+52', country: 'Mexico' },
+  { prefix: '+51', country: 'Peru' },
+  { prefix: '+34', country: 'España' },
+  { prefix: '+56', country: 'Chile' },
+  { prefix: '+54', country: 'Argentina' },
+  { prefix: '+58', country: 'Venezuela' },
+  { prefix: '+55', country: 'Brasil' },
+  { prefix: '+44', country: 'Reino Unido' },
+  { prefix: '+49', country: 'Alemania' },
+  { prefix: '+33', country: 'Francia' },
+  { prefix: '+39', country: 'Italia' },
+  { prefix: '+31', country: 'Paises Bajos' },
+  { prefix: '+64', country: 'Nueva Zelanda' },
+  { prefix: '+53', country: 'Cuba' },
+  // 1 dígito
+  { prefix: '+1', country: 'EEUU' }
+];
+
+const ISO_COUNTRY_MAP = {
+  'CO': 'Colombia',
+  'MX': 'Mexico',
+  'PE': 'Peru',
+  'US': 'EEUU',
+  'USA': 'EEUU',
+  'ES': 'España',
+  'CL': 'Chile',
+  'AR': 'Argentina',
+  'PA': 'Panama',
+  'EC': 'Ecuador',
+  'VE': 'Venezuela',
+  'CR': 'Costa Rica',
+  'GT': 'Guatemala',
+  'SV': 'El Salvador',
+  'HN': 'Honduras',
+  'NI': 'Nicaragua',
+  'BO': 'Bolivia',
+  'PY': 'Paraguay',
+  'UY': 'Uruguay',
+  'DO': 'Rep Dominicana',
+  'PR': 'Puerto Rico',
+  'CA': 'Canada',
+  'GB': 'Reino Unido',
+  'UK': 'Reino Unido',
+  'DE': 'Alemania',
+  'FR': 'Francia',
+  'IT': 'Italia',
+  'BR': 'Brasil',
+  'NL': 'Paises Bajos',
+  'NZ': 'Nueva Zelanda',
+  'CU': 'Cuba'
+};
+
+const CANADIAN_AREA_CODES = ['403', '587', '780', '825', '236', '250', '604', '672', '778', '204', '431', '506', '709', '902', '782', '226', '249', '289', '343', '365', '416', '437', '519', '548', '613', '647', '705', '807', '905', '367', '418', '438', '450', '514', '579', '581', '819', '873', '306', '639', '867'];
+
+/**
+ * Detecta la etiqueta de país correspondiente según el indicativo telefónico o país de GHL
+ */
+function detectCountryTag(phone, rawCountry) {
+  let normalizedPhone = (phone || '').trim().replace(/[^\d+]/g, '');
+  if (normalizedPhone && !normalizedPhone.startsWith('+')) {
+    normalizedPhone = '+' + normalizedPhone;
+  }
+
+  // 1. Prioridad: Indicativo telefónico internacional
+  if (normalizedPhone) {
+    if (normalizedPhone.startsWith('+1') && normalizedPhone.length >= 5) {
+      const areaCode = normalizedPhone.substring(2, 5);
+      if (CANADIAN_AREA_CODES.includes(areaCode) || String(rawCountry).toUpperCase() === 'CA') {
+        return 'Canada';
+      }
+      for (const item of DIALING_CODE_TO_COUNTRY.filter(d => d.prefix.startsWith('+1') && d.prefix.length > 2)) {
+        if (normalizedPhone.startsWith(item.prefix)) return item.country;
+      }
+      return 'EEUU';
+    }
+
+    for (const item of DIALING_CODE_TO_COUNTRY) {
+      if (normalizedPhone.startsWith(item.prefix)) {
+        return item.country;
+      }
+    }
+  }
+
+  // 2. Si no se detectó por teléfono, comprobar código ISO o país enviado por GHL
+  if (rawCountry && typeof rawCountry === 'string') {
+    const code = rawCountry.trim().toUpperCase();
+    if (ISO_COUNTRY_MAP[code]) return ISO_COUNTRY_MAP[code];
+    if (rawCountry.trim().length > 0) return rawCountry.trim();
+  }
+
+  // 3. Si el teléfono tiene otro indicativo internacional no mapeado, usar el indicativo como etiqueta
+  if (normalizedPhone && normalizedPhone.length >= 3) {
+    const match = normalizedPhone.match(/^\+(\d{1,4})/);
+    if (match) return `+${match[1]}`;
+  }
+
+  return null;
+}
 
 // Almacenamiento en memoria para depuración y descarte de duplicados
 let lastWebhookReceived = null;
@@ -390,6 +515,7 @@ function extractContactData(payload) {
 
   const email = (contact.email || payload.email || '').trim().toLowerCase();
   let phone = (contact.phone || payload.phone || '').trim().replace(/[^\d+]/g, '');
+  const country = contact.country || payload.country || '';
   const companyName = contact.company_name || payload.company_name || '';
 
   const guests = [];
@@ -401,12 +527,12 @@ function extractContactData(payload) {
     });
   }
 
-  return { name, email, phone, companyName, guests };
+  return { name, email, phone, country, companyName, guests };
 }
 
 function extractAppointmentData(payload) {
   const appt = payload.appointment || payload.calendar || {};
-  const id = appt.id || payload.appointment_id || '';
+  const id = appt.appointmentId || appt.appointment_id || appt.id || payload.appointment_id || '';
 
   let startTimeRaw = appt.start_time || appt.startTime || payload.start_time || payload.selected_time || payload.date;
   let startTimeUnix = parseAppointmentTimestamp(startTimeRaw);
@@ -535,7 +661,22 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     });
   }
 
+  if (appointmentData.id) {
+    customFieldsValues.push({
+      field_id: FIELD_ID_CITA_GHL,
+      values: [{ value: String(appointmentData.id) }]
+    });
+  }
+
   let leadId;
+
+  // Detectar etiqueta de país según indicativo telefónico o país de GHL
+  const countryTag = detectCountryTag(contactData.phone, contactData.country);
+  const tagsToApply = [TAG_CITA_AGENDADA];
+  if (countryTag) {
+    tagsToApply.push(countryTag);
+    console.log(`Etiqueta de país detectada para el lead: [${countryTag}]`);
+  }
 
   if (targetLead) {
     leadId = targetLead.id;
@@ -546,7 +687,7 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
       responsible_user_id: config.assignedUserId,
       custom_fields_values: customFieldsValues,
       _embedded: {
-        tags: mergeTags(targetLead._embedded?.tags, TAG_CITA_AGENDADA)
+        tags: mergeTags(targetLead._embedded?.tags, tagsToApply)
       }
     };
 
@@ -576,6 +717,9 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   } else {
     console.log(`No se encontró Lead activo en el embudo [${config.pipelineId}] para el contacto [${contactId}]. Creando nuevo Lead...`);
 
+    const initialTags = [{ name: TAG_CITA_AGENDADA }];
+    if (countryTag) initialTags.push({ name: countryTag });
+
     // Crear nuevo lead con todos los campos ya diligenciados
     const createPayload = {
       name: `Cita: ${contactData.name}`,
@@ -585,7 +729,7 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
       custom_fields_values: customFieldsValues,
       _embedded: {
         contacts: [{ id: contactId }],
-        tags: [{ name: TAG_CITA_AGENDADA }]
+        tags: initialTags
       }
     };
 
@@ -805,10 +949,14 @@ async function addNote(leadId, text, headers) {
   }
 }
 
-function mergeTags(existingTags, newTagName) {
+function mergeTags(existingTags, newTags) {
   const tags = (existingTags || []).map(t => ({ name: t.name }));
-  if (!tags.some(t => t.name === newTagName)) {
-    tags.push({ name: newTagName });
+  const toAdd = Array.isArray(newTags) ? newTags : [newTags];
+  for (const item of toAdd) {
+    const tagName = typeof item === 'string' ? item : item?.name;
+    if (tagName && !tags.some(t => t.name.toLowerCase() === tagName.toLowerCase())) {
+      tags.push({ name: tagName });
+    }
   }
   return tags;
 }
