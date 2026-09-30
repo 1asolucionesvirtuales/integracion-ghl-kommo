@@ -34,8 +34,220 @@ const TASK_TYPE_CAPACITACION = 2852135; // Capacitación
 const USER_CRISTINA = 7306169;
 const USER_IVAN = 10095483;
 
-// Mapeo opcional de IDs de usuario de GoHighLevel (GHL) -> Kommo
-const GHL_USER_MAP = {};
+// Mapeo directo de IDs de usuario de GoHighLevel (GHL) -> Kommo
+const GHL_USER_MAP = {
+  'mKFMMIOboPnMktIEP8tm': USER_CRISTINA,
+  'SJAtUAv8tGmB66cwwpEk': USER_IVAN
+};
+
+// Mapeo maestro de los 19 Calendarios de GoHighLevel (GHL) por calendarId permanente
+const CALENDAR_MAP = {
+  // --- ACTIVOS CRM (Clientes Actuales) - NO SE MUEVEN DE ETAPA NUNCA ---
+  // PA - Plan Aguacate
+  'nSYEVzDk3Ubuq0v9PEb6': {
+    name: 'PA - Asesoria 30 min - Cristina Orozco',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_30MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 30m (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'KZJD5qytAkCMsVarJCNP': {
+    name: 'PA - Asesoria 1 hora - Cristina Orozco',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_60MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 1h (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'Rrzjc0GBJ2siNnSlBUEp': {
+    name: 'PA - Asesoría 30 min - Ivan Lalinde',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_30MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 30m (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+  '2lYBCoQ6wrFLmHSA931L': {
+    name: 'PA - Asesoría 1 hora - Iván Lalinde',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_60MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 1h (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+
+  // PB - Plan Básico
+  'cuwsIpNAZXwg3deGaMID': {
+    name: 'PB - Asesoria 30 min - Cristina Orozco',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_30MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 30m (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  '4v9w6eHxvpkD2ExKOrX0': {
+    name: 'PB - Asesoria 1 hora - Cristina Orozco',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_60MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 1h (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'YoRbBOf33dONrKFILcKr': {
+    name: 'PB - Asesoria 30 min - Ivan Lalinde',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_30MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 30m (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+  'xnWsAxBZHmJrPKio2RfU': {
+    name: 'PB - Asesoria 1 hora - Ivan Lalinde',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_60MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 1h (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+
+  // PF - Plan Full
+  'TgjQcJxoSSJ02kbUilqq': {
+    name: 'PF - Asesoria 30 min - Cristina Orozco',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_30MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 30m (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'm0xt6hC7QpD4DETj9tG3': {
+    name: 'PF - Asesoria 1 hora - Cristina Orozco',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_60MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 1h (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'KRc59DT14F7pxvDweBA1': {
+    name: 'PF - Asesoria 30 min - Iván Lalinde',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_30MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 30m (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+  'QHjWBYSbIOCun4oWLPE7': {
+    name: 'PF - Asesoria 1 hora - Ivan Lalinde',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_ASESORIA_60MIN,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Asesoría 1h (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+
+  // Diagnóstico Inicial Post Compra (2 horas)
+  'UwFhu0OxNGNyzJ8sUlY1': {
+    name: 'Diagnostico Inicial Post Compra (Cris)',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_PRIMERA_ASESORIA_2H,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Primera Asesoría 2h (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'l5iFM4JpbfU22e1HXp0k': {
+    name: 'Diagnostico Inicial Post Compra (Ivan)',
+    scenario: 'activos',
+    pipelineId: PIPELINE_ACTIVOS_ID,
+    moveStage: false,
+    enumCitaId: ENUM_PRIMERA_ASESORIA_2H,
+    taskTypeId: TASK_TYPE_CAPACITACION,
+    taskTitle: 'Capacitación - Primera Asesoría 2h (Ivan)',
+    assignedUserId: USER_IVAN
+  },
+
+  // --- VENTAS CRM (Leads Nuevos / Prospección) - SE MUEVEN A REUNIÓN INICIAL ---
+  'GnDsrKwllRz3drPsRNBH': {
+    name: 'Primeros pasos CRM - Diagnostico (Gamif.)',
+    scenario: 'ventas',
+    pipelineId: PIPELINE_VENTAS_ID,
+    stageId: STAGE_REUNION_INICIAL_ID,
+    moveStage: true,
+    enumCitaId: ENUM_VENTA_60MIN,
+    taskTypeId: TASK_TYPE_DEMO_KOMMO,
+    taskTitle: 'Demo Kommo - Embudo Gamificado',
+    assignedUserId: null // dinámico según asesor asignado
+  },
+  'rKNNKvgJsjP8YNdbLuiu': {
+    name: 'Cita diagnostico 1ra vez Venta Directa',
+    scenario: 'ventas',
+    pipelineId: PIPELINE_VENTAS_ID,
+    stageId: STAGE_REUNION_INICIAL_ID,
+    moveStage: true,
+    enumCitaId: ENUM_VENTA_60MIN,
+    taskTypeId: TASK_TYPE_DEMO_KOMMO,
+    taskTitle: 'Demo Kommo - Cita Diagnóstico Venta',
+    assignedUserId: null
+  },
+  'JiBENjjhUMzUh7gvCCUv': {
+    name: 'Reprogramación Cita Diagnostico',
+    scenario: 'ventas',
+    pipelineId: PIPELINE_VENTAS_ID,
+    stageId: STAGE_REUNION_INICIAL_ID,
+    moveStage: true,
+    enumCitaId: ENUM_VENTA_60MIN,
+    taskTypeId: TASK_TYPE_DEMO_KOMMO,
+    taskTitle: 'Demo Kommo - Cita Venta Reprogramada',
+    assignedUserId: null
+  },
+  '2vxNvWkXzszIRqihLbUw': {
+    name: 'Consultas finales (Cristina 2da vez)',
+    scenario: 'ventas',
+    pipelineId: PIPELINE_VENTAS_ID,
+    stageId: STAGE_REUNION_INICIAL_ID,
+    moveStage: true,
+    enumCitaId: ENUM_VENTA_30MIN,
+    taskTypeId: TASK_TYPE_DEMO_KOMMO,
+    taskTitle: 'Demo Kommo - Cita Venta 2da Vez (Cristina)',
+    assignedUserId: USER_CRISTINA
+  },
+  'HdtWK2sLJMLrjf8xZw07': {
+    name: 'Consultas finales (Ivan 2da vez)',
+    scenario: 'ventas',
+    pipelineId: PIPELINE_VENTAS_ID,
+    stageId: STAGE_REUNION_INICIAL_ID,
+    moveStage: true,
+    enumCitaId: ENUM_VENTA_30MIN,
+    taskTypeId: TASK_TYPE_DEMO_KOMMO,
+    taskTitle: 'Demo Kommo - Cita Venta 2da Vez (Ivan)',
+    assignedUserId: USER_IVAN
+  }
+};
 
 // Etiqueta oficial de cita agendada
 const TAG_CITA_AGENDADA = 'Cita agendada';
@@ -249,6 +461,60 @@ module.exports = async (req, res) => {
 function classifyCalendar(payload, appointmentData) {
   const fullText = JSON.stringify(payload).toLowerCase();
 
+  // PRIORIDAD 1: Identificación infalible por calendarId permanente de GoHighLevel (19 calendarios mapeados)
+  const calendarId = appointmentData?.calendarId ||
+    payload.calendarId ||
+    payload.calendar_id ||
+    payload.calendar?.id ||
+    payload.appointment?.calendarId ||
+    payload.appointment?.calendar_id ||
+    payload.mediumId ||
+    payload.contact?.attributionSource?.mediumId ||
+    payload.contact?.lastAttributionSource?.mediumId;
+
+  if (calendarId && CALENDAR_MAP[calendarId]) {
+    const matched = { ...CALENDAR_MAP[calendarId] };
+    if (!matched.assignedUserId) {
+      matched.assignedUserId = determineAssignedAdvisor(payload, fullText);
+    }
+    console.log(`[Clasificación] Calendario reconocido por ID permanente [${calendarId}]: "${matched.name}" (Escenario: ${matched.scenario}, Asesor: ${matched.assignedUserId})`);
+    return matched;
+  }
+
+  // PRIORIDAD 2: Identificación por URL de landing page o palabras clave de planes activos
+  if (
+    fullText.includes('agenda-plan-aguacate') || fullText.includes('plan-aguacate') ||
+    fullText.includes('agenda-plan-banano') || fullText.includes('plan-banano') ||
+    fullText.includes('agenda-plan-basico') || fullText.includes('plan-basico') ||
+    fullText.includes('agenda-plan-fresa') || fullText.includes('plan-fresa') ||
+    fullText.includes('agenda-plan-full') || fullText.includes('plan-full') ||
+    fullText.includes('agenda-renovaciones') || fullText.includes('renovaciones-') || fullText.includes('renovaciones')
+  ) {
+    const isIvan = fullText.includes('ivan') || fullText.includes('-il-');
+    const is60m = fullText.includes('1-hora') || fullText.includes('60-min') || fullText.includes('1hora');
+    const isRenovacion = fullText.includes('renovacion');
+
+    let planName = 'Asesoría';
+    if (fullText.includes('banano') || fullText.includes('basico')) planName = 'PB (Banano)';
+    else if (fullText.includes('fresa') || fullText.includes('full')) planName = 'PF (Fresa)';
+    else if (fullText.includes('aguacate')) planName = 'PA (Aguacate)';
+    else if (isRenovacion) planName = 'Renovaciones';
+
+    console.log(`[Clasificación] Detectado plan de clientes activos por landing page: ${planName} (Ivan: ${isIvan}, 60m: ${is60m})`);
+
+    return {
+      name: `${planName} - Clientes Activos (${isIvan ? 'Ivan' : 'Cristina'})`,
+      scenario: 'activos',
+      pipelineId: PIPELINE_ACTIVOS_ID,
+      moveStage: false,
+      enumCitaId: is60m ? ENUM_ASESORIA_60MIN : ENUM_ASESORIA_30MIN,
+      taskTypeId: TASK_TYPE_CAPACITACION,
+      taskTitle: `Capacitación - ${planName} ${is60m ? '1h' : '30m'} (${isIvan ? 'Ivan' : 'Cristina'})`,
+      assignedUserId: isIvan ? USER_IVAN : USER_CRISTINA
+    };
+  }
+
+  // PRIORIDAD 3: Respaldo por slugs históricos de GHL
   // Escenario 1: Ventas CRM
   // 1.1 Cita 2da vez Cristina
   if (fullText.includes('consultas-finales-cris')) {
@@ -532,7 +798,38 @@ function extractContactData(payload) {
 
 function extractAppointmentData(payload) {
   const appt = payload.appointment || payload.calendar || {};
-  const id = appt.appointmentId || appt.appointment_id || appt.id || payload.appointment_id || '';
+
+  // Extraer ID de la cita
+  let id = '';
+  if (payload.appointment && payload.appointment.id) {
+    id = payload.appointment.id;
+  } else if (payload.calendar && payload.calendar.appointmentId) {
+    id = payload.calendar.appointmentId;
+  } else if (payload.appointmentId || payload.appointment_id) {
+    id = payload.appointmentId || payload.appointment_id;
+  } else if (appt.appointmentId || appt.appointment_id) {
+    id = appt.appointmentId || appt.appointment_id;
+  } else if (appt.id && !appt.calendarName) {
+    id = appt.id;
+  }
+
+  // Extraer ID del calendario de GoHighLevel (GHL)
+  let calendarId = '';
+  if (payload.calendar && payload.calendar.id) {
+    calendarId = payload.calendar.id;
+  } else if (payload.appointment && payload.appointment.calendarId) {
+    calendarId = payload.appointment.calendarId;
+  } else if (payload.calendarId || payload.calendar_id) {
+    calendarId = payload.calendarId || payload.calendar_id;
+  } else if (appt.calendarId || appt.calendar_id) {
+    calendarId = appt.calendarId || appt.calendar_id;
+  } else if (payload.contact?.attributionSource?.mediumId) {
+    calendarId = payload.contact.attributionSource.mediumId;
+  } else if (payload.contact?.lastAttributionSource?.mediumId) {
+    calendarId = payload.contact.lastAttributionSource.mediumId;
+  } else if (payload.mediumId) {
+    calendarId = payload.mediumId;
+  }
 
   let startTimeRaw = appt.start_time || appt.startTime || payload.start_time || payload.selected_time || payload.date;
   let startTimeUnix = parseAppointmentTimestamp(startTimeRaw);
@@ -542,12 +839,101 @@ function extractAppointmentData(payload) {
     meetingLink = payload.location;
   }
 
-  let notes = appt.notes || payload.notes || payload.description || payload.details || '';
-  if (!notes && payload.customData) {
-    notes = payload.customData['Detalles de la cita'] || payload.customData['detalles_de_la_cita'] || '';
+  // Extraer detalles de la cita / notas ingresadas por el cliente en el formulario
+  let motivo = '';
+  let detalle = '';
+
+  const searchSources = [
+    payload,
+    payload.customData,
+    payload.contact,
+    payload.appointment,
+    payload.calendar,
+    payload.triggerData
+  ];
+
+  // 1. Claves prioritarias para Detalles de la cita
+  const detalleKeys = [
+    'Detalles de la cita',
+    'detalles_de_la_cita',
+    'Detalle de la cita',
+    'detalle_de_la_cita',
+    'Detalles de la Cita',
+    'Detalle de la Cita',
+    'Detalles',
+    'detalles',
+    'notes',
+    'notes_content',
+    'description',
+    'details',
+    'comments',
+    'comentarios'
+  ];
+
+  for (const src of searchSources) {
+    if (!src || typeof src !== 'object') continue;
+    for (const k of detalleKeys) {
+      if (src[k] && typeof src[k] === 'string' && src[k].trim().length > 0) {
+        detalle = src[k].trim();
+        break;
+      }
+    }
+    if (detalle) break;
   }
 
-  return { id, startTimeUnix, meetingLink, notes };
+  // 2. Claves para Motivo de la cita
+  const motivoKeys = [
+    'Motivo de la cita',
+    'motivo_de_la_cita',
+    'Motivo de la Cita',
+    'Motivo',
+    'motivo'
+  ];
+
+  for (const src of searchSources) {
+    if (!src || typeof src !== 'object') continue;
+    for (const k of motivoKeys) {
+      if (src[k] && typeof src[k] === 'string' && src[k].trim().length > 0) {
+        motivo = src[k].trim();
+        break;
+      }
+    }
+    if (motivo) break;
+  }
+
+  // 3. Búsqueda difusa por coincidencia parcial de nombres de campo
+  if (!detalle) {
+    for (const src of searchSources) {
+      if (!src || typeof src !== 'object') continue;
+      for (const [k, v] of Object.entries(src)) {
+        const lowerK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (lowerK.includes('detalle') && typeof v === 'string' && v.trim().length > 0) {
+          detalle = v.trim();
+          break;
+        }
+      }
+      if (detalle) break;
+    }
+  }
+
+  if (!motivo) {
+    for (const src of searchSources) {
+      if (!src || typeof src !== 'object') continue;
+      for (const [k, v] of Object.entries(src)) {
+        const lowerK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (lowerK.includes('motivo') && typeof v === 'string' && v.trim().length > 0) {
+          motivo = v.trim();
+          break;
+        }
+      }
+      if (motivo) break;
+    }
+  }
+
+  // Si hay detalle específico se prioriza; si no, el motivo
+  const notes = detalle || motivo || '';
+
+  return { id, calendarId, startTimeUnix, meetingLink, notes, detalle, motivo };
 }
 
 /**
@@ -672,7 +1058,13 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
 
   // Detectar etiqueta de país según indicativo telefónico o país de GHL
   const countryTag = detectCountryTag(contactData.phone, contactData.country);
-  const tagsToApply = [TAG_CITA_AGENDADA];
+  const tagsToApply = [];
+
+  // La etiqueta "Cita agendada" SOLO aplica para prospectos (Ventas CRM). Para clientes activos (Activos CRM) NO se coloca.
+  if (config.scenario === 'ventas') {
+    tagsToApply.push(TAG_CITA_AGENDADA);
+  }
+
   if (countryTag) {
     tagsToApply.push(countryTag);
     console.log(`Etiqueta de país detectada para el lead: [${countryTag}]`);
@@ -717,7 +1109,10 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   } else {
     console.log(`No se encontró Lead activo en el embudo [${config.pipelineId}] para el contacto [${contactId}]. Creando nuevo Lead...`);
 
-    const initialTags = [{ name: TAG_CITA_AGENDADA }];
+    const initialTags = [];
+    if (config.scenario === 'ventas') {
+      initialTags.push({ name: TAG_CITA_AGENDADA });
+    }
     if (countryTag) initialTags.push({ name: countryTag });
 
     // Crear nuevo lead con todos los campos ya diligenciados
@@ -745,17 +1140,23 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     console.log(`Nuevo Lead creado en Kommo: [${leadId}]`);
   }
 
-  // 4. Crear la Tarea correspondiente en Kommo
+  // 4. Crear la Tarea correspondiente en Kommo con el Detalle de la cita
   let taskText = config.taskTitle;
-  if (config.scenario === 'activos' && appointmentData.notes) {
-    taskText = `📌 Capacitación GHL: ${appointmentData.notes}`;
+  if (appointmentData.notes) {
+    taskText = appointmentData.notes;
   }
 
   await createTask(leadId, config.assignedUserId, config.taskTypeId, timestampCita, taskText, headers);
 
   // 5. Dejar una Nota informativa en el Lead
   const formattedDate = new Date(timestampCita * 1000).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
-  const noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• Notas del cliente: ${appointmentData.notes || 'Ninguna'}`;
+  let notesDetailText = appointmentData.notes || 'Ninguna';
+  if (appointmentData.detalle && appointmentData.motivo && appointmentData.detalle !== appointmentData.motivo) {
+    notesDetailText = `${appointmentData.detalle} (Motivo: ${appointmentData.motivo})`;
+  } else if (appointmentData.motivo && !appointmentData.detalle) {
+    notesDetailText = `Motivo: ${appointmentData.motivo}`;
+  }
+  const noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• Detalle de la cita: ${notesDetailText}`;
   await addNote(leadId, noteContent, headers);
 
   return {
