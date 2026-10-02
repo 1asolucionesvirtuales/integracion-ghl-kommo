@@ -10,6 +10,7 @@ const KOMMO_TOKEN = process.env.KOMMO_TOKEN || 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1
 // IDs Oficiales de Kommo
 const PIPELINE_VENTAS_ID = 4524443; // Ventas CRM
 const STAGE_REUNION_INICIAL_ID = 105441247; // Reunion Inicial
+const STAGE_LEAD_PERDIDO_ID = 143; // Lead Perdido (Descalificados)
 const PIPELINE_ACTIVOS_ID = 4636139; // Activos CRM
 
 // IDs de Campos Personalizados
@@ -249,8 +250,10 @@ const CALENDAR_MAP = {
   }
 };
 
-// Etiqueta oficial de cita agendada
+// Etiquetas oficiales de citas y descalificación
 const TAG_CITA_AGENDADA = 'Cita agendada';
+const TAG_DESCALIFICADO = 'Descalificado';
+const TAG_NO_INVERSION = 'No quiere invertir';
 
 // Mapeo oficial de indicativos telefónicos a nombres de etiquetas de país en Kommo
 const DIALING_CODE_TO_COUNTRY = [
@@ -436,6 +439,17 @@ module.exports = async (req, res) => {
 
     // Clasificar agenda
     const calendarConfig = classifyCalendar(payload, appointmentData);
+
+    // Evaluar si el lead está descalificado por su respuesta de inversión
+    const disqualificationInfo = checkDisqualification(payload);
+    if (disqualificationInfo.disqualified) {
+      calendarConfig.isDisqualified = true;
+      calendarConfig.disqualification = disqualificationInfo;
+      calendarConfig.stageId = STAGE_LEAD_PERDIDO_ID;
+      calendarConfig.moveStage = true;
+      console.log(`[Descalificación] Prospecto descalificado: ${disqualificationInfo.question} -> "${disqualificationInfo.answer}"`);
+    }
+
     console.log('Configuración detectada para la cita:', calendarConfig);
 
     // Sincronizar en Kommo garantizando disponibilidad de campos antes del bot
@@ -454,6 +468,65 @@ module.exports = async (req, res) => {
     });
   }
 };
+
+/**
+ * Detecta si el prospecto respondió negativamente a la pregunta de inversión o presupuesto en el formulario
+ * (ej: "Acepta inversion en implementacion": "No quiero invertir en la implementación")
+ */
+function checkDisqualification(payload) {
+  const searchSources = [
+    payload,
+    payload.customData,
+    payload.contact,
+    payload.appointment,
+    payload.calendar,
+    payload.triggerData
+  ];
+
+  for (const src of searchSources) {
+    if (!src || typeof src !== 'object') continue;
+    for (const [key, val] of Object.entries(src)) {
+      if (typeof val !== 'string') continue;
+      const normKey = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const normVal = val.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+      if (
+        normKey.includes('inversion') ||
+        normKey.includes('invertir') ||
+        normKey.includes('presupuesto')
+      ) {
+        if (
+          normVal.includes('no quiero invertir') ||
+          normVal.includes('no estoy dispuesto') ||
+          normVal.includes('sin presupuesto') ||
+          normVal.includes('no puedo invertir') ||
+          normVal.startsWith('no')
+        ) {
+          return {
+            disqualified: true,
+            question: key,
+            answer: val
+          };
+        }
+      }
+    }
+  }
+
+  // Búsqueda de respaldo en el JSON completo del payload
+  const fullText = JSON.stringify(payload).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (
+    fullText.includes('no quiero invertir en la implementacion') ||
+    fullText.includes('no quiero invertir')
+  ) {
+    return {
+      disqualified: true,
+      question: 'Acepta inversión en implementación',
+      answer: 'No quiero invertir en la implementación'
+    };
+  }
+
+  return { disqualified: false };
+}
 
 /**
  * Clasifica la cita según el slug o nombre del calendario en GHL
@@ -1060,8 +1133,12 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   const countryTag = detectCountryTag(contactData.phone, contactData.country);
   const tagsToApply = [];
 
-  // La etiqueta "Cita agendada" SOLO aplica para prospectos (Ventas CRM). Para clientes activos (Activos CRM) NO se coloca.
-  if (config.scenario === 'ventas') {
+  // Si está descalificado por inversión, etiquetar correspondientemente y NO poner "Cita agendada"
+  if (config.isDisqualified) {
+    tagsToApply.push(TAG_DESCALIFICADO);
+    tagsToApply.push(TAG_NO_INVERSION);
+  } else if (config.scenario === 'ventas') {
+    // La etiqueta "Cita agendada" SOLO aplica para prospectos válidos (Ventas CRM).
     tagsToApply.push(TAG_CITA_AGENDADA);
   }
 
@@ -1074,12 +1151,18 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     leadId = targetLead.id;
     console.log(`[PASO 1] Guardando campos personalizados en Lead activo [${leadId}]...`);
 
+    // Limpiar etiqueta de "Cita agendada" si el lead está descalificado
+    let existingTags = targetLead._embedded?.tags || [];
+    if (config.isDisqualified) {
+      existingTags = removeTags(existingTags, [TAG_CITA_AGENDADA]);
+    }
+
     // PASO 1: Guardar primero los campos personalizados, etiquetas y asesor responsable
     const saveFieldsPayload = {
       responsible_user_id: config.assignedUserId,
       custom_fields_values: customFieldsValues,
       _embedded: {
-        tags: mergeTags(targetLead._embedded?.tags, tagsToApply)
+        tags: mergeTags(existingTags, tagsToApply)
       }
     };
 
@@ -1093,9 +1176,10 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     // Pequeña pausa técnica para asegurar la persistencia en la base de datos de Kommo
     await sleep(1500);
 
-    // PASO 2: Si corresponde mover de etapa (Ventas CRM), moverlo AHORA para que el bot lea los campos listos
+    // PASO 2: Mover de etapa (Reunión Inicial si es válido, o Lead Perdido si está descalificado)
     if (config.moveStage) {
-      console.log(`[PASO 2] Moviendo Lead [${leadId}] a la etapa Reunión Inicial...`);
+      const stageName = config.isDisqualified ? 'Lead Perdido (Descalificado)' : 'Reunión Inicial';
+      console.log(`[PASO 2] Moviendo Lead [${leadId}] a la etapa ${stageName} (status_id: ${config.stageId})...`);
       await fetch(patchUrl, {
         method: 'PATCH',
         headers,
@@ -1110,14 +1194,17 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     console.log(`No se encontró Lead activo en el embudo [${config.pipelineId}] para el contacto [${contactId}]. Creando nuevo Lead...`);
 
     const initialTags = [];
-    if (config.scenario === 'ventas') {
+    if (config.isDisqualified) {
+      initialTags.push({ name: TAG_DESCALIFICADO });
+      initialTags.push({ name: TAG_NO_INVERSION });
+    } else if (config.scenario === 'ventas') {
       initialTags.push({ name: TAG_CITA_AGENDADA });
     }
     if (countryTag) initialTags.push({ name: countryTag });
 
     // Crear nuevo lead con todos los campos ya diligenciados
     const createPayload = {
-      name: `Cita: ${contactData.name}`,
+      name: config.isDisqualified ? `Descalificado: ${contactData.name}` : `Cita: ${contactData.name}`,
       pipeline_id: config.pipelineId,
       status_id: config.moveStage ? config.stageId : undefined,
       responsible_user_id: config.assignedUserId,
@@ -1140,23 +1227,33 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     console.log(`Nuevo Lead creado en Kommo: [${leadId}]`);
   }
 
-  // 4. Crear la Tarea correspondiente en Kommo con el Detalle de la cita
-  let taskText = config.taskTitle;
-  if (appointmentData.notes) {
-    taskText = appointmentData.notes;
+  // 4. Si el lead es válido, crear la Tarea de Cita en Kommo. Si está descalificado, cerrar tareas previas
+  if (!config.isDisqualified) {
+    let taskText = config.taskTitle;
+    if (appointmentData.notes) {
+      taskText = appointmentData.notes;
+    }
+    await createTask(leadId, config.assignedUserId, config.taskTypeId, timestampCita, taskText, headers);
+  } else {
+    await completeAppointmentTasks(leadId, headers);
   }
-
-  await createTask(leadId, config.assignedUserId, config.taskTypeId, timestampCita, taskText, headers);
 
   // 5. Dejar una Nota informativa en el Lead
   const formattedDate = new Date(timestampCita * 1000).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
-  let notesDetailText = appointmentData.notes || 'Ninguna';
-  if (appointmentData.detalle && appointmentData.motivo && appointmentData.detalle !== appointmentData.motivo) {
-    notesDetailText = `${appointmentData.detalle} (Motivo: ${appointmentData.motivo})`;
-  } else if (appointmentData.motivo && !appointmentData.detalle) {
-    notesDetailText = `Motivo: ${appointmentData.motivo}`;
+  let noteContent;
+
+  if (config.isDisqualified) {
+    noteContent = `🚫 LEAD DESCALIFICADO AUTOMÁTICAMENTE\n• Pregunta en formulario: ${config.disqualification?.question || 'Inversión en implementación'}\n• Respuesta del prospecto: "${config.disqualification?.answer || 'No quiero invertir en la implementación'}"\n• La cita fue cancelada automáticamente en GoHighLevel y se envió correo con material de auto-implementación.\n• El lead fue movido a la etapa "Lead Perdido" en Kommo (sin notificar por WhatsApp).`;
+  } else {
+    let notesDetailText = appointmentData.notes || 'Ninguna';
+    if (appointmentData.detalle && appointmentData.motivo && appointmentData.detalle !== appointmentData.motivo) {
+      notesDetailText = `${appointmentData.detalle} (Motivo: ${appointmentData.motivo})`;
+    } else if (appointmentData.motivo && !appointmentData.detalle) {
+      notesDetailText = `Motivo: ${appointmentData.motivo}`;
+    }
+    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• Detalle de la cita: ${notesDetailText}`;
   }
-  const noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• Detalle de la cita: ${notesDetailText}`;
+
   await addNote(leadId, noteContent, headers);
 
   return {
@@ -1164,7 +1261,8 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     leadId,
     assignedUserId: config.assignedUserId,
     scenario: config.scenario,
-    appointmentTime: formattedDate
+    appointmentTime: formattedDate,
+    isDisqualified: !!config.isDisqualified
   };
 }
 
@@ -1361,3 +1459,34 @@ function mergeTags(existingTags, newTags) {
   }
   return tags;
 }
+
+function removeTags(existingTags, tagsToRemove) {
+  const toRemove = (Array.isArray(tagsToRemove) ? tagsToRemove : [tagsToRemove]).map(t => String(t).toLowerCase());
+  return (existingTags || [])
+    .filter(t => !toRemove.includes(t.name.toLowerCase()))
+    .map(t => ({ name: t.name }));
+}
+
+async function completeAppointmentTasks(leadId, headers) {
+  try {
+    const tasksUrl = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/tasks?filter[entity_id]=${leadId}&filter[entity_type]=leads&filter[is_completed]=0`;
+    const tasksRes = await fetch(tasksUrl, { headers });
+    if (tasksRes.ok) {
+      const tasksData = await tasksRes.json();
+      const activeTasks = tasksData._embedded?.tasks || [];
+      for (const t of activeTasks) {
+        if (t.task_type_id === TASK_TYPE_DEMO_KOMMO || t.task_type_id === TASK_TYPE_CAPACITACION) {
+          await fetch(`https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/tasks/${t.id}`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ is_completed: true })
+          });
+          console.log(`Tarea [${t.id}] de cita completada automáticamente.`);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error cerrando tareas de cita:', e);
+  }
+}
+
