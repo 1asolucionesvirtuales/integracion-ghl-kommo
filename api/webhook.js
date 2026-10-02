@@ -6,11 +6,13 @@
 
 const KOMMO_SUBDOMAIN = process.env.KOMMO_SUBDOMAIN || '1asolucionesvirtuales';
 const KOMMO_TOKEN = process.env.KOMMO_TOKEN || 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6Ijg4YjVkM2YxNTE5ZTdjMGM4YmMzMGRjNmNhNzc5OWU0ZmI3NWM3OGQ1MTg0NWZlMmY0YzkzZGM4ZTM5ZGYwNTBhMzZhN2VmYmZiNGYwY2E3In0.eyJhdWQiOiJiZDdjMDlhYy02OWNhLTQ5MjktYjFlMi1lZDg5MjU4MjI3MjIiLCJqdGkiOiI4OGI1ZDNmMTUxOWU3YzBjOGJjMzBkYzZjYTc3OTllNGZiNzVjNzhkNTE4NDVmZTJmNGM5M2RjOGUzOWRmMDUwYTM2YTdlZmJmYjRmMGNhNyIsImlhdCI6MTc5MDYzNDA2MSwibmJmIjoxNzkwNjM0MDYxLCJleHAiOjE5MjQ5MDU2MDAsInN1YiI6IjczMDYxNjkiLCJncmFudF90eXBlIjoiIiwiYWNjb3VudF9pZCI6Mjk2Mjg3MzcsImJhc2VfZG9tYWluIjoia29tbW8uY29tIiwidmVyc2lvbiI6Miwic2NvcGVzIjpbImxpc3RfZXh0ZXJuYWxfbWVzc2FnZXMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJmaWxlcyIsImNybSIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJzZW5kX2V4dGVybmFsX21lc3NhZ2VzIl0sImhhc2hfdXVpZCI6IjBhYzQ3ZjNkLTc2YmItNDY0YS1iMmVlLWEzYjA4ZjRjNGRiMiIsImFwaV9kb21haW4iOiJhcGktYy5rb21tby5jb20ifQ.KGt1iFAyjXcvf9UKYRyRugfMgqSwB_JcERZ3tRh6bIaugXb9LTSvZQyoNlFDop7C2Naj2dX2wEXdCeo2n9m-HpJAwlLVIGNGrfK1PNVHbVLdgCNWCzDeIZObA_ivBN4ETV2PUevJb8EVMFDXYaQo4xwynsEbt3At-lKne_ZiIOKUaUToQ9lsE8VUqr4LIvkyIp0uqTjavDNcB4q0b07y0xjhwiW7hatynSu2Bvl4bIwL4qJ3JOfCxlPtzy6JGbYyGdr4rYFMVtD97IncCUGJDHk54ALjNsLcbmMWgS9Az1eZ5lrelz0kCIzwbztD6PsionsK0IyJl0T9vmlw39ubyQ';
+const GHL_TOKEN = process.env.GHL_TOKEN || 'pit-8c6e43e2-cc22-405c-bdfc-2ed26221954a';
 
 // IDs Oficiales de Kommo
 const PIPELINE_VENTAS_ID = 4524443; // Ventas CRM
 const STAGE_REUNION_INICIAL_ID = 105441247; // Reunion Inicial
 const STAGE_LEAD_PERDIDO_ID = 143; // Lead Perdido (Descalificados)
+const LOSS_REASON_PRESUPUESTO_ID = 8093831; // Presupuesto insuficiente
 const PIPELINE_ACTIVOS_ID = 4636139; // Activos CRM
 
 // IDs de Campos Personalizados
@@ -448,14 +450,14 @@ module.exports = async (req, res) => {
     // Clasificar agenda
     const calendarConfig = classifyCalendar(payload, appointmentData);
 
-    // Evaluar si el lead está descalificado por su respuesta de inversión
-    const disqualificationInfo = checkDisqualification(payload);
+    // Evaluar si el lead está descalificado por su respuesta de inversión o cita cancelada en GHL
+    const disqualificationInfo = await checkDisqualification(payload, appointmentData.id);
     if (disqualificationInfo.disqualified) {
       calendarConfig.isDisqualified = true;
       calendarConfig.disqualification = disqualificationInfo;
       calendarConfig.stageId = STAGE_LEAD_PERDIDO_ID;
       calendarConfig.moveStage = true;
-      console.log(`[Descalificación] Prospecto descalificado: ${disqualificationInfo.question} -> "${disqualificationInfo.answer}"`);
+      console.log(`[Descalificación] Prospecto descalificado: ${disqualificationInfo.question} -> "${disqualificationInfo.answer}" (Motivo: ${disqualificationInfo.reason})`);
     }
 
     console.log('Configuración detectada para la cita:', calendarConfig);
@@ -478,58 +480,182 @@ module.exports = async (req, res) => {
 };
 
 /**
- * Detecta si el prospecto respondió negativamente a la pregunta de inversión o presupuesto en el formulario
- * (ej: "Acepta inversion en implementacion": "No quiero invertir en la implementación")
+ * Extrae recursivamente todos los pares clave-valor de cualquier nivel (objetos y arrays como customFields)
  */
-function checkDisqualification(payload) {
-  const searchSources = [
-    payload,
-    payload.customData,
-    payload.contact,
-    payload.appointment,
-    payload.calendar,
-    payload.triggerData
-  ];
-
-  for (const src of searchSources) {
-    if (!src || typeof src !== 'object') continue;
-    for (const [key, val] of Object.entries(src)) {
-      if (typeof val !== 'string') continue;
-      const normKey = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      const normVal = val.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-      if (
-        normKey.includes('inversion') ||
-        normKey.includes('invertir') ||
-        normKey.includes('presupuesto')
-      ) {
-        if (
-          normVal.includes('no quiero invertir') ||
-          normVal.includes('no estoy dispuesto') ||
-          normVal.includes('sin presupuesto') ||
-          normVal.includes('no puedo invertir') ||
-          normVal.startsWith('no')
-        ) {
-          return {
-            disqualified: true,
-            question: key,
-            answer: val
-          };
+function extractAllKeyValues(root) {
+  const result = [];
+  function recurse(current, currentPath = '') {
+    if (!current) return;
+    if (Array.isArray(current)) {
+      for (let i = 0; i < current.length; i++) {
+        const item = current[i];
+        if (typeof item === 'object' && item !== null) {
+          if (item.value !== undefined) {
+            const keyName = item.key || item.name || item.fieldKey || item.id || `${currentPath}[${i}]`;
+            result.push({ key: String(keyName), val: String(item.value) });
+          }
+          recurse(item, `${currentPath}[${i}]`);
+        } else if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+          result.push({ key: `${currentPath}[${i}]`, val: String(item) });
+        }
+      }
+    } else if (typeof current === 'object') {
+      for (const [k, v] of Object.entries(current)) {
+        if (typeof v === 'string') {
+          result.push({ key: k, val: v });
+        } else if (typeof v === 'number' || typeof v === 'boolean') {
+          result.push({ key: k, val: String(v) });
+        } else if (typeof v === 'object' && v !== null) {
+          recurse(v, k);
         }
       }
     }
   }
+  recurse(root);
+  return result;
+}
 
-  // Búsqueda de respaldo en el JSON completo del payload
+/**
+ * Consulta la cita directamente en la API oficial de GoHighLevel para validar su estado en tiempo real
+ */
+async function fetchGHLAppointment(appointmentId) {
+  if (!appointmentId || !GHL_TOKEN) return null;
+  try {
+    const url = `https://services.leadconnectorhq.com/calendars/events/appointments/${appointmentId}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${GHL_TOKEN}`,
+        'Version': '2021-04-15',
+        'Accept': 'application/json'
+      }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.appointment || null;
+    } else {
+      console.warn(`[GHL API] No se pudo consultar cita ${appointmentId}: status ${res.status}`);
+    }
+  } catch (err) {
+    console.warn(`[GHL API] Error consultando cita ${appointmentId}:`, err.message);
+  }
+  return null;
+}
+
+/**
+ * Detecta si el prospecto respondió negativamente a la pregunta de inversión o si la cita fue cancelada en GHL
+ */
+async function checkDisqualification(payload, appointmentId) {
+  // 1. Verificar si la cita viene cancelada en el payload de GHL
+  const payloadStatuses = [
+    payload.appointmentStatus,
+    payload.appoinmentStatus,
+    payload.status,
+    payload.appointment?.appointmentStatus,
+    payload.appointment?.appoinmentStatus,
+    payload.appointment?.status,
+    payload.calendar?.appointmentStatus,
+    payload.calendar?.appoinmentStatus,
+    payload.calendar?.status
+  ];
+
+  for (const s of payloadStatuses) {
+    if (typeof s === 'string') {
+      const lower = s.toLowerCase().trim();
+      if (lower === 'cancelled' || lower === 'canceled' || lower === 'invalid' || lower === 'no_show') {
+        console.log(`[Descalificación] Detectado estado cancelado en payload de GHL: "${s}"`);
+        return {
+          disqualified: true,
+          reason: 'cancelled_in_payload',
+          question: 'Estado de cita en GHL (Payload)',
+          answer: `Cita cancelada (${s})`
+        };
+      }
+    }
+  }
+
+  // 2. Si tenemos appointmentId, consultar el estado real y actualizado en la API de GHL
+  if (appointmentId && GHL_TOKEN) {
+    // Si la cita fue cancelada por un flujo de GHL tras responder el formulario, esperamos 1.2s para asegurar persistencia
+    await sleep(1200);
+    const ghlAppt = await fetchGHLAppointment(appointmentId);
+    if (ghlAppt) {
+      const ghlStatus = (
+        ghlAppt.appointmentStatus ||
+        ghlAppt.appoinmentStatus ||
+        ghlAppt.status ||
+        ghlAppt.statusDetails?.status ||
+        ghlAppt.statusDetails?.state ||
+        ''
+      ).toLowerCase().trim();
+
+      console.log(`[GHL API] Estado verificado para cita [${appointmentId}]: "${ghlStatus}"`);
+      if (ghlStatus === 'cancelled' || ghlStatus === 'canceled' || ghlStatus === 'invalid' || ghlStatus === 'no_show') {
+        return {
+          disqualified: true,
+          reason: 'cancelled_in_ghl_api',
+          question: 'Estado de cita en GoHighLevel (API)',
+          answer: `Cita cancelada automáticamente en GoHighLevel (${ghlAppt.appointmentStatus || ghlAppt.statusDetails?.status || 'cancelled'})`
+        };
+      }
+    }
+  }
+
+  // 3. Búsqueda profunda en todos los campos (incluyendo customFields arrays y objetos anidados)
+  const allFields = extractAllKeyValues(payload);
+  for (const { key, val } of allFields) {
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const normKey = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const normVal = val.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    if (
+      normKey.includes('inversion') ||
+      normKey.includes('invertir') ||
+      normKey.includes('presupuesto') ||
+      normKey.includes('capital') ||
+      normKey.includes('pagar') ||
+      normKey.includes('costo') ||
+      normKey.includes('capacidad')
+    ) {
+      if (
+        normVal.includes('no quiero invertir') ||
+        normVal.includes('no estoy dispuesto') ||
+        normVal.includes('sin presupuesto') ||
+        normVal.includes('no puedo invertir') ||
+        normVal.includes('no tengo presupuesto') ||
+        normVal.includes('no cuento con') ||
+        normVal.includes('hacerlo solo') ||
+        normVal.includes('por mi cuenta') ||
+        normVal.includes('gratis') ||
+        normVal === 'no' ||
+        normVal.startsWith('no ')
+      ) {
+        return {
+          disqualified: true,
+          reason: 'form_answer',
+          question: key,
+          answer: val
+        };
+      }
+    }
+  }
+
+  // 4. Búsqueda de respaldo en el JSON serializado completo
   const fullText = JSON.stringify(payload).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (
     fullText.includes('no quiero invertir en la implementacion') ||
-    fullText.includes('no quiero invertir')
+    fullText.includes('no quiero invertir') ||
+    fullText.includes('no estoy dispuesto a invertir') ||
+    fullText.includes('sin presupuesto') ||
+    fullText.includes('"appointmentstatus":"cancelled"') ||
+    fullText.includes('"appoinmentstatus":"cancelled"') ||
+    fullText.includes('"status":"cancelled"')
   ) {
     return {
       disqualified: true,
-      question: 'Acepta inversión en implementación',
-      answer: 'No quiero invertir en la implementación'
+      reason: 'full_text_match',
+      question: 'Detección en payload',
+      answer: 'Respuesta negativa a inversión o cita cancelada en GoHighLevel'
     };
   }
 
@@ -862,32 +988,20 @@ function determineAssignedAdvisor(payload, fullText) {
  * 3. "Recopilo las propuestas pero no tengo ninguna influencia en la decisión final" -> No (enum: 618322)
  */
 function extractDecisionLevel(payload) {
-  const searchSources = [
-    payload,
-    payload.customData,
-    payload.contact,
-    payload.appointment,
-    payload.calendar,
-    payload.triggerData
-  ];
-
   let rawAnswer = '';
 
-  for (const src of searchSources) {
-    if (!src || typeof src !== 'object') continue;
-    for (const [k, v] of Object.entries(src)) {
-      if (typeof v !== 'string' || !v.trim()) continue;
-      const lowerK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      if (
-        lowerK.includes('nivel de influencia') ||
-        (lowerK.includes('toma') && lowerK.includes('decision')) ||
-        lowerK.includes('decisiones')
-      ) {
-        rawAnswer = v.trim();
-        break;
-      }
+  const allFields = extractAllKeyValues(payload);
+  for (const { key, val } of allFields) {
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const lowerK = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (
+      lowerK.includes('nivel de influencia') ||
+      (lowerK.includes('toma') && lowerK.includes('decision')) ||
+      lowerK.includes('decisiones')
+    ) {
+      rawAnswer = val.trim();
+      break;
     }
-    if (rawAnswer) break;
   }
 
   if (!rawAnswer) {
@@ -1110,7 +1224,17 @@ function extractAppointmentData(payload) {
   // Si hay detalle específico se prioriza; si no, el motivo
   const notes = detalle || motivo || '';
 
-  return { id, calendarId, startTimeUnix, meetingLink, notes, detalle, motivo };
+  const status = (
+    appt.appointmentStatus ||
+    appt.appoinmentStatus ||
+    appt.status ||
+    payload.appointmentStatus ||
+    payload.appoinmentStatus ||
+    payload.status ||
+    ''
+  ).toLowerCase().trim();
+
+  return { id, calendarId, startTimeUnix, meetingLink, notes, detalle, motivo, status };
 }
 
 /**
@@ -1306,13 +1430,17 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     if (config.moveStage) {
       const stageName = config.isDisqualified ? 'Lead Perdido (Descalificado)' : 'Reunión Inicial';
       console.log(`[PASO 2] Moviendo Lead [${leadId}] a la etapa ${stageName} (status_id: ${config.stageId})...`);
+      const patchBody = {
+        pipeline_id: config.pipelineId,
+        status_id: config.stageId
+      };
+      if (config.isDisqualified) {
+        patchBody.loss_reason_id = LOSS_REASON_PRESUPUESTO_ID;
+      }
       await fetch(patchUrl, {
         method: 'PATCH',
         headers,
-        body: JSON.stringify({
-          pipeline_id: config.pipelineId,
-          status_id: config.stageId
-        })
+        body: JSON.stringify(patchBody)
       });
     }
 
@@ -1333,6 +1461,9 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
         tags: initialTags
       }
     };
+    if (config.isDisqualified) {
+      createPayload.loss_reason_id = LOSS_REASON_PRESUPUESTO_ID;
+    }
 
     const postUrl = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads`;
     const createRes = await fetch(postUrl, {
@@ -1362,7 +1493,7 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   let noteContent;
 
   if (config.isDisqualified) {
-    noteContent = `🚫 LEAD DESCALIFICADO AUTOMÁTICAMENTE\n• Pregunta en formulario: ${config.disqualification?.question || 'Inversión en implementación'}\n• Respuesta del prospecto: "${config.disqualification?.answer || 'No quiero invertir en la implementación'}"\n• La cita fue cancelada automáticamente en GoHighLevel y se envió correo con material de auto-implementación.\n• El lead fue movido a la etapa "Lead Perdido" en Kommo (sin notificar por WhatsApp).`;
+    noteContent = `🚫 LEAD DESCALIFICADO AUTOMÁTICAMENTE\n• Motivo: ${config.disqualification?.question || 'Inversión en implementación'}\n• Detalle: "${config.disqualification?.answer || 'No quiere invertir en la implementación'}"\n• La cita fue cancelada automáticamente en GoHighLevel.\n• El lead fue movido a la etapa "Lead Perdido" en Kommo (sin notificar por WhatsApp ni crear tareas).`;
   } else {
     let notesDetailText = appointmentData.notes || 'Ninguna';
     if (appointmentData.detalle && appointmentData.motivo && appointmentData.detalle !== appointmentData.motivo) {
