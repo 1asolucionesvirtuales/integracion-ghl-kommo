@@ -19,6 +19,12 @@ const FIELD_CITAS_SEGUIMIENTO = 1038738; // date_time
 const FIELD_SEGUNDO_RECORDATORIO = 1046715; // date_time
 const FIELD_SEGUIMIENTO_O_CITA = 1046709; // select
 const FIELD_ID_CITA_GHL = 1054302; // text (ID Cita GHL)
+const FIELD_TOMA_DECISION = 1048733; // multiselect en Contactos ("Toma la decisión?")
+
+// Opciones de "Toma la decisión?" (Contactos)
+const ENUM_DECISION_SI = 613413; // Si
+const ENUM_DECISION_INFLUYE = 613415; // Influye
+const ENUM_DECISION_NO = 618322; // No
 
 // Opciones de "Seguimiento o Cita?"
 const ENUM_VENTA_60MIN = 611285; // Reunión 60 min - Venta
@@ -250,10 +256,12 @@ const CALENDAR_MAP = {
   }
 };
 
-// Etiquetas oficiales de citas y descalificación
+// Etiquetas oficiales de citas, descalificación e invitados
 const TAG_CITA_AGENDADA = 'Cita agendada';
 const TAG_DESCALIFICADO = 'Descalificado';
 const TAG_NO_INVERSION = 'No quiere invertir';
+const TAG_SIN_DECISOR_INVITADO = 'Sin Decisor Invitado';
+const TAG_DECISOR_INVITADO = 'Decisor Invitado';
 
 // Mapeo oficial de indicativos telefónicos a nombres de etiquetas de país en Kommo
 const DIALING_CODE_TO_COUNTRY = [
@@ -846,6 +854,89 @@ function determineAssignedAdvisor(payload, fullText) {
   return USER_CRISTINA;
 }
 
+/**
+ * Extrae y mapea la respuesta de "¿Cuál es tu nivel de influencia en la toma de decisiones en la empresa?"
+ * Correlación con Kommo ("Toma la decisión?"):
+ * 1. "Soy autónomo en reunirme con proveedores y elegir a quien prefiera" -> Si (enum: 613413)
+ * 2. "Me reúno con los proveedores y puedo influir en la decisión de contratación basado en recomendación" -> Influye (enum: 613415)
+ * 3. "Recopilo las propuestas pero no tengo ninguna influencia en la decisión final" -> No (enum: 618322)
+ */
+function extractDecisionLevel(payload) {
+  const searchSources = [
+    payload,
+    payload.customData,
+    payload.contact,
+    payload.appointment,
+    payload.calendar,
+    payload.triggerData
+  ];
+
+  let rawAnswer = '';
+
+  for (const src of searchSources) {
+    if (!src || typeof src !== 'object') continue;
+    for (const [k, v] of Object.entries(src)) {
+      if (typeof v !== 'string' || !v.trim()) continue;
+      const lowerK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (
+        lowerK.includes('nivel de influencia') ||
+        (lowerK.includes('toma') && lowerK.includes('decision')) ||
+        lowerK.includes('decisiones')
+      ) {
+        rawAnswer = v.trim();
+        break;
+      }
+    }
+    if (rawAnswer) break;
+  }
+
+  if (!rawAnswer) {
+    const fullText = JSON.stringify(payload).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (fullText.includes('autonomo en reunirme') || fullText.includes('elegir a quien prefiera')) {
+      rawAnswer = 'Soy autónomo en reunirme con proveedores y elegir a quien prefiera';
+    } else if (fullText.includes('puedo influir en la decision') || fullText.includes('basado en recomendacion')) {
+      rawAnswer = 'Me reúno con los proveedores y puedo influir en la decisión de contratación basado en recomendación';
+    } else if (fullText.includes('no tengo ninguna influencia') || fullText.includes('recopilo las propuestas')) {
+      rawAnswer = 'Recopilo las propuestas pero no tengo ninguna influencia en la decisión final';
+    }
+  }
+
+  if (!rawAnswer) {
+    return { level: null, enumId: null, raw: '' };
+  }
+
+  const norm = rawAnswer.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  // 1. Si
+  if (norm.includes('autonomo') || norm.includes('elegir a quien prefiera') || norm === 'si') {
+    return {
+      level: 'Si',
+      enumId: ENUM_DECISION_SI,
+      raw: rawAnswer
+    };
+  }
+
+  // 2. Influye
+  if (norm.includes('influir') || norm.includes('recomendacion') || norm.includes('reuno con los proveedores')) {
+    return {
+      level: 'Influye',
+      enumId: ENUM_DECISION_INFLUYE,
+      raw: rawAnswer
+    };
+  }
+
+  // 3. No
+  if (norm.includes('ninguna influencia') || norm.includes('recopilo') || norm.includes('no tengo') || norm === 'no') {
+    return {
+      level: 'No',
+      enumId: ENUM_DECISION_NO,
+      raw: rawAnswer
+    };
+  }
+
+  return { level: null, enumId: null, raw: rawAnswer };
+}
+
 function extractContactData(payload) {
   const contact = payload.contact || {};
   const first = contact.first_name || payload.first_name || '';
@@ -858,7 +949,7 @@ function extractContactData(payload) {
   const companyName = contact.company_name || payload.company_name || '';
 
   const guests = [];
-  const rawGuests = payload.guests || payload.additional_contacts || payload.invitees || [];
+  const rawGuests = payload.guests || payload.additional_contacts || payload.invitees || payload.appointment?.guests || payload.calendar?.guests || [];
   if (Array.isArray(rawGuests)) {
     rawGuests.forEach(g => {
       if (typeof g === 'string') guests.push({ email: g, name: g });
@@ -866,7 +957,20 @@ function extractContactData(payload) {
     });
   }
 
-  return { name, email, phone, country, companyName, guests };
+  // Extraer respuesta a la pregunta de toma de decisiones
+  const decisionInfo = extractDecisionLevel(payload);
+
+  return {
+    name,
+    email,
+    phone,
+    country,
+    companyName,
+    guests,
+    decisionLevel: decisionInfo.level,
+    decisionEnumId: decisionInfo.enumId,
+    decisionRaw: decisionInfo.raw
+  };
 }
 
 function extractAppointmentData(payload) {
@@ -1080,6 +1184,10 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
       console.log(`Actualizando responsable del contacto [${contact.id}] a [${config.assignedUserId}]...`);
       await updateEntityResponsible('contacts', contact.id, config.assignedUserId, headers);
     }
+    if (contactData.decisionEnumId) {
+      console.log(`Actualizando nivel de decisión en contacto [${contact.id}] a enum [${contactData.decisionEnumId}]...`);
+      await updateContactField(contact.id, FIELD_TOMA_DECISION, contactData.decisionEnumId, headers);
+    }
   }
 
   const contactId = contact.id;
@@ -1140,6 +1248,18 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   } else if (config.scenario === 'ventas') {
     // La etiqueta "Cita agendada" SOLO aplica para prospectos válidos (Ventas CRM).
     tagsToApply.push(TAG_CITA_AGENDADA);
+
+    // Detectar si no toma la decisión por sí mismo (No o Influye) y si agregó o no invitados
+    if (contactData.decisionLevel === 'No' || contactData.decisionLevel === 'Influye') {
+      const hasGuests = contactData.guests && contactData.guests.length > 0;
+      if (hasGuests) {
+        tagsToApply.push(TAG_DECISOR_INVITADO);
+        console.log(`[Decisión] Prospecto (${contactData.decisionLevel}) agregó invitado(s). Etiqueta aplicada: [${TAG_DECISOR_INVITADO}]`);
+      } else {
+        tagsToApply.push(TAG_SIN_DECISOR_INVITADO);
+        console.log(`[Decisión] Prospecto (${contactData.decisionLevel}) NO agregó invitados. Etiqueta aplicada: [${TAG_SIN_DECISOR_INVITADO}]`);
+      }
+    }
   }
 
   if (countryTag) {
@@ -1151,10 +1271,16 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     leadId = targetLead.id;
     console.log(`[PASO 1] Guardando campos personalizados en Lead activo [${leadId}]...`);
 
-    // Limpiar etiqueta de "Cita agendada" si el lead está descalificado
+    // Limpiar etiquetas incompatibles
     let existingTags = targetLead._embedded?.tags || [];
     if (config.isDisqualified) {
-      existingTags = removeTags(existingTags, [TAG_CITA_AGENDADA]);
+      existingTags = removeTags(existingTags, [TAG_CITA_AGENDADA, TAG_SIN_DECISOR_INVITADO, TAG_DECISOR_INVITADO]);
+    } else {
+      if (tagsToApply.includes(TAG_DECISOR_INVITADO)) {
+        existingTags = removeTags(existingTags, [TAG_SIN_DECISOR_INVITADO]);
+      } else if (tagsToApply.includes(TAG_SIN_DECISOR_INVITADO)) {
+        existingTags = removeTags(existingTags, [TAG_DECISOR_INVITADO]);
+      }
     }
 
     // PASO 1: Guardar primero los campos personalizados, etiquetas y asesor responsable
@@ -1193,14 +1319,7 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   } else {
     console.log(`No se encontró Lead activo en el embudo [${config.pipelineId}] para el contacto [${contactId}]. Creando nuevo Lead...`);
 
-    const initialTags = [];
-    if (config.isDisqualified) {
-      initialTags.push({ name: TAG_DESCALIFICADO });
-      initialTags.push({ name: TAG_NO_INVERSION });
-    } else if (config.scenario === 'ventas') {
-      initialTags.push({ name: TAG_CITA_AGENDADA });
-    }
-    if (countryTag) initialTags.push({ name: countryTag });
+    const initialTags = tagsToApply.map(t => ({ name: t }));
 
     // Crear nuevo lead con todos los campos ya diligenciados
     const createPayload = {
@@ -1251,7 +1370,17 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     } else if (appointmentData.motivo && !appointmentData.detalle) {
       notesDetailText = `Motivo: ${appointmentData.motivo}`;
     }
-    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• Detalle de la cita: ${notesDetailText}`;
+
+    const decisionText = contactData.decisionLevel
+      ? `${contactData.decisionLevel} (${contactData.decisionRaw})`
+      : (contactData.decisionRaw || 'No indicado');
+
+    let guestsText = 'Ninguno';
+    if (contactData.guests && contactData.guests.length > 0) {
+      guestsText = contactData.guests.map(g => g.email ? `${g.name || ''} <${g.email}>`.trim() : (g.name || JSON.stringify(g))).join(', ');
+    }
+
+    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}`;
   }
 
   await addNote(leadId, noteContent, headers);
@@ -1331,6 +1460,12 @@ async function createContact(contactData, responsibleUserId, headers) {
       values: [{ value: contactData.email, enum_code: 'WORK' }]
     });
   }
+  if (contactData.decisionEnumId) {
+    customFieldsValues.push({
+      field_id: FIELD_TOMA_DECISION,
+      values: [{ enum_id: contactData.decisionEnumId }]
+    });
+  }
 
   const payload = {
     name: contactData.name,
@@ -1347,6 +1482,27 @@ async function createContact(contactData, responsibleUserId, headers) {
 
   const data = await res.json();
   return data._embedded?.contacts?.[0];
+}
+
+async function updateContactField(contactId, fieldId, enumId, headers) {
+  try {
+    const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts/${contactId}`;
+    await fetch(url, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        custom_fields_values: [
+          {
+            field_id: fieldId,
+            values: [{ enum_id: enumId }]
+          }
+        ]
+      })
+    });
+    console.log(`Campo [${fieldId}] actualizado en contacto [${contactId}] con enum [${enumId}]`);
+  } catch (e) {
+    console.error(`Error actualizando campo [${fieldId}] en contacto [${contactId}]:`, e);
+  }
 }
 
 async function updateEntityResponsible(entityType, entityId, responsibleUserId, headers) {
