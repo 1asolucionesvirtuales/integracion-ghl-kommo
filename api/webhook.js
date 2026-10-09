@@ -576,8 +576,9 @@ async function checkDisqualification(payload, appointmentId) {
 
   // 2. Si tenemos appointmentId, consultar el estado real y actualizado en la API de GHL
   if (appointmentId && GHL_TOKEN) {
-    // Si la cita fue cancelada por un flujo de GHL tras responder el formulario, esperamos 1.2s para asegurar persistencia
-    await sleep(1200);
+    // Si la cita fue cancelada por un flujo de GHL tras responder el formulario (toma ~3s en GHL),
+    // esperamos 3.5s para que la cancelación esté totalmente registrada en la base de datos de GHL
+    await sleep(3500);
     const ghlAppt = await fetchGHLAppointment(appointmentId);
     if (ghlAppt) {
       const ghlStatus = (
