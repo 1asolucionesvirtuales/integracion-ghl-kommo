@@ -21,6 +21,7 @@ const FIELD_CITAS_SEGUIMIENTO = 1038738; // date_time
 const FIELD_SEGUNDO_RECORDATORIO = 1046715; // date_time
 const FIELD_SEGUIMIENTO_O_CITA = 1046709; // select
 const FIELD_ID_CITA_GHL = 1054302; // text (ID Cita GHL)
+const FIELD_REPROGRAMACION_DIRECTA = 1054422; // url (Reprogramacion directa)
 const FIELD_TOMA_DECISION = 1048733; // multiselect en Contactos ("Toma la decisión?")
 
 // Opciones de "Toma la decisión?" (Contactos)
@@ -1222,6 +1223,43 @@ function extractAppointmentData(payload) {
     }
   }
 
+  // Extraer enlace de reprogramación directa (reschedule link de GHL)
+  let rescheduleLink = '';
+  const rescheduleKeys = [
+    'reschedule_link',
+    'rescheduleLink',
+    'reprogramacion_directa',
+    'reprogramacion_link',
+    'appointment_reschedule_link',
+    'reschedule_url',
+    'rescheduleUrl'
+  ];
+
+  for (const src of searchSources) {
+    if (!src || typeof src !== 'object') continue;
+    for (const k of rescheduleKeys) {
+      if (src[k] && typeof src[k] === 'string' && src[k].trim().startsWith('http')) {
+        rescheduleLink = src[k].trim();
+        break;
+      }
+    }
+    if (rescheduleLink) break;
+  }
+
+  // Búsqueda difusa en todos los campos si no se encontró en las claves directas
+  if (!rescheduleLink) {
+    const allFields = extractAllKeyValues(payload);
+    for (const { key, val } of allFields) {
+      if (typeof val === 'string' && val.trim().startsWith('http')) {
+        const lowerK = key.toLowerCase();
+        if (lowerK.includes('reschedule') || lowerK.includes('reprogram')) {
+          rescheduleLink = val.trim();
+          break;
+        }
+      }
+    }
+  }
+
   // Si hay detalle específico se prioriza; si no, el motivo
   const notes = detalle || motivo || '';
 
@@ -1235,7 +1273,7 @@ function extractAppointmentData(payload) {
     ''
   ).toLowerCase().trim();
 
-  return { id, calendarId, startTimeUnix, meetingLink, notes, detalle, motivo, status };
+  return { id, calendarId, startTimeUnix, meetingLink, rescheduleLink, notes, detalle, motivo, status };
 }
 
 /**
@@ -1357,6 +1395,13 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     customFieldsValues.push({
       field_id: FIELD_ID_CITA_GHL,
       values: [{ value: String(appointmentData.id) }]
+    });
+  }
+
+  if (appointmentData.rescheduleLink) {
+    customFieldsValues.push({
+      field_id: FIELD_REPROGRAMACION_DIRECTA,
+      values: [{ value: appointmentData.rescheduleLink }]
     });
   }
 
@@ -1512,7 +1557,8 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
       guestsText = contactData.guests.map(g => g.email ? `${g.name || ''} <${g.email}>`.trim() : (g.name || JSON.stringify(g))).join(', ');
     }
 
-    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}`;
+    const rescheduleText = appointmentData.rescheduleLink ? `\n• Enlace de reprogramación directa: ${appointmentData.rescheduleLink}` : '';
+    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}${rescheduleText}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}`;
   }
 
   await addNote(leadId, noteContent, headers);
