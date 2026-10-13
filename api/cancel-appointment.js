@@ -18,7 +18,7 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS' || req.method === 'HEAD') return res.status(200).end();
 
   if (req.method === 'GET') {
     return res.status(200).json({
@@ -41,6 +41,14 @@ module.exports = async (req, res) => {
     if (!leadId && req.query.lead_id) leadId = req.query.lead_id;
 
     let appointmentId = body.appointment_id || body.appointmentId || body.ghl_appointment_id;
+
+    // Validación/ping inicial de Kommo Salesbot: si llega sin leadId ni appointmentId, responder 200 OK
+    if (!leadId && !appointmentId) {
+      return res.status(200).json({
+        status: 'ok',
+        message: 'Endpoint de cancelación activo y validado por Kommo.'
+      });
+    }
 
     const kommoHeaders = {
       'Authorization': `Bearer ${KOMMO_TOKEN}`,
