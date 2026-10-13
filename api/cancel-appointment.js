@@ -108,6 +108,22 @@ module.exports = async (req, res) => {
       await updateKommoOnCancellation(leadId, appointmentId, leadData, kommoHeaders);
     }
 
+    // 5. Si la petición vino de Salesbot con return_url, notificarle para que continúe el flujo
+    if (body.return_url) {
+      try {
+        await fetch(body.return_url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            data: { status: 'cancelled', appointmentId }
+          })
+        });
+        console.log('Kommo Salesbot return_url notificado exitosamente.');
+      } catch (rue) {
+        console.warn('No se pudo notificar a return_url de Kommo:', rue.message);
+      }
+    }
+
     return res.status(200).json({
       status: 'ok',
       message: 'Cita cancelada con éxito en GoHighLevel y Kommo CRM.',
