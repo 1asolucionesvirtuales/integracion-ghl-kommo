@@ -1581,13 +1581,33 @@ async function searchContact(phone, email, headers) {
     const cleanDigits = phone.replace(/[^\d]/g, '');
     const phoneQueries = [cleanDigits];
 
-    // Si es un número colombiano de 10 dígitos (ej. 3133931654)
+    // 1. Variantes de Colombia (+57)
     if (cleanDigits.length === 10 && cleanDigits.startsWith('3')) {
       phoneQueries.push(`+57${cleanDigits}`);
       phoneQueries.push(`57${cleanDigits}`);
     } else if (cleanDigits.startsWith('57') && cleanDigits.length === 12) {
       phoneQueries.push(`+${cleanDigits}`);
       phoneQueries.push(cleanDigits.substring(2));
+    }
+
+    // 2. Variantes de México (+52) - Crucial por el prefijo móvil "1" que asigna WhatsApp/Kommo (+52 1 ...)
+    if (cleanDigits.startsWith('52') && (cleanDigits.length === 12 || cleanDigits.length === 13)) {
+      const national10 = cleanDigits.slice(-10);
+      phoneQueries.push(national10);
+      phoneQueries.push(`+521${national10}`);
+      phoneQueries.push(`521${national10}`);
+      phoneQueries.push(`+52${national10}`);
+    } else if (cleanDigits.length === 10) {
+      phoneQueries.push(`+521${cleanDigits}`);
+      phoneQueries.push(`+52${cleanDigits}`);
+    }
+
+    // 3. Para cualquier teléfono de más de 10 dígitos, añadir los últimos 10 dígitos (búsqueda local infalible en Kommo)
+    if (cleanDigits.length > 10) {
+      const last10 = cleanDigits.slice(-10);
+      if (!phoneQueries.includes(last10)) {
+        phoneQueries.push(last10);
+      }
     }
 
     for (const q of phoneQueries) {
