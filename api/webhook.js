@@ -1446,6 +1446,18 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     if (config.isDisqualified) {
       existingTags = removeTags(existingTags, [TAG_CITA_AGENDADA, TAG_SIN_DECISOR_INVITADO, TAG_DECISOR_INVITADO]);
     } else {
+      // Si el lead viene de Lead Perdido o fue reactivado, limpiar etiquetas de pérdida previas
+      if (targetLead.status_id === STAGE_LEAD_PERDIDO_ID || targetLead.wasReactivatedFromLost) {
+        existingTags = removeTags(existingTags, [
+          'No compro', 'no compro',
+          'NO abrir', 'no abrir',
+          'Cita Cancelada', 'cita cancelada',
+          'Descalificado', 'descalificado',
+          'No quiere invertir', 'no quiere invertir',
+          'No le interesa', 'no le interesa',
+          'Perdido', 'perdido'
+        ]);
+      }
       if (tagsToApply.includes(TAG_DECISOR_INVITADO)) {
         existingTags = removeTags(existingTags, [TAG_SIN_DECISOR_INVITADO]);
       } else if (tagsToApply.includes(TAG_SIN_DECISOR_INVITADO)) {
@@ -1482,6 +1494,8 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
       };
       if (config.isDisqualified) {
         patchBody.loss_reason_id = LOSS_REASON_PRESUPUESTO_ID;
+      } else if (targetLead.status_id === STAGE_LEAD_PERDIDO_ID || targetLead.wasReactivatedFromLost) {
+        patchBody.loss_reason_id = null;
       }
       await fetch(patchUrl, {
         method: 'PATCH',
@@ -1558,7 +1572,8 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     }
 
     const rescheduleText = appointmentData.rescheduleLink ? `\n• Enlace de reprogramación directa: ${appointmentData.rescheduleLink}` : '';
-    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}${rescheduleText}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}`;
+    const reactivatedNotice = targetLead?.wasReactivatedFromLost ? '\n• Estado: Lead reactivado automáticamente desde "Lead Perdido" por nuevo agendamiento' : '';
+    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}${rescheduleText}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}${reactivatedNotice}`;
   }
 
   await addNote(leadId, noteContent, headers);
@@ -1741,7 +1756,7 @@ async function findLeadForContact(contactId, pipelineId, headers) {
     const leadsData = await leadsRes.json();
     const leads = leadsData._embedded?.leads || [];
 
-    // 3. Buscar lead activo en el pipeline (que no esté cerrado ni en pérdida)
+    // 3. Prioridad 1: Buscar lead activo en el pipeline (que no esté cerrado ni en pérdida)
     const activeLead = leads.find(l =>
       l.pipeline_id === pipelineId &&
       l.status_id !== 142 && // No ganado
@@ -1753,7 +1768,19 @@ async function findLeadForContact(contactId, pipelineId, headers) {
       return activeLead;
     }
 
-    console.log(`Contacto [${contactId}] no tiene leads activos en pipeline [${pipelineId}].`);
+    // 4. Prioridad 2: Si el contacto no tiene lead activo pero tiene un lead en "Lead Perdido" (143), reactivarlo
+    const lostLeads = leads
+      .filter(l => l.pipeline_id === pipelineId && l.status_id === 143)
+      .sort((a, b) => b.id - a.id);
+
+    if (lostLeads.length > 0) {
+      const lostLead = lostLeads[0];
+      console.log(`Reactivando lead desde 'Lead Perdido' para contacto [${contactId}]: [${lostLead.id}] ${lostLead.name}`);
+      lostLead.wasReactivatedFromLost = true;
+      return lostLead;
+    }
+
+    console.log(`Contacto [${contactId}] no tiene leads activos ni en pérdida en pipeline [${pipelineId}].`);
     return null;
   } catch (e) {
     console.error('Error buscando lead para contacto:', e);
