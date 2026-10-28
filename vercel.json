@@ -1,6 +1,8 @@
 {
   "version": 2,
   "rewrites": [
+    { "source": "/api/cancel-appointment", "destination": "/api/cancel-appointment" },
+    { "source": "/api/kommo-tasks", "destination": "/api/kommo-tasks" },
     { "source": "/(.*)", "destination": "/api/webhook" }
   ]
 }
