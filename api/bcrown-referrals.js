@@ -221,6 +221,12 @@ async function createLeadIfNew(referral) {
   }
 
   // 2. Crear el Lead y Contacto asociado vía POST /api/v4/leads/complex
+  const countryTag = detectCountryFromPhone(phone);
+  const leadTags = [{ name: 'Referido BCROWN' }];
+  if (countryTag) {
+    leadTags.push({ name: countryTag });
+  }
+
   const payload = [
     {
       name: name,
@@ -237,11 +243,7 @@ async function createLeadIfNew(referral) {
         }
       ],
       _embedded: {
-        tags: [
-          {
-            name: 'Referido BCROWN'
-          }
-        ],
+        tags: leadTags,
         contacts: [
           {
             name: name,
@@ -322,6 +324,47 @@ async function findExistingLeadByLinkOrPhone(link, phone) {
       }
     }
   }
+
+  return null;
+}
+
+/**
+ * Detecta el país según el prefijo telefónico internacional para etiquetar en Kommo
+ */
+function detectCountryFromPhone(phone) {
+  if (!phone) return null;
+  const p = phone.replace(/[^\d]/g, '');
+
+  // Prefijos de 3 dígitos (Latinoamérica)
+  if (p.startsWith('593')) return 'Ecuador';
+  if (p.startsWith('591')) return 'Bolivia';
+  if (p.startsWith('595')) return 'Paraguay';
+  if (p.startsWith('598')) return 'Uruguay';
+  if (p.startsWith('502')) return 'Guatemala';
+  if (p.startsWith('503')) return 'El Salvador';
+  if (p.startsWith('504')) return 'Honduras';
+  if (p.startsWith('505')) return 'Nicaragua';
+  if (p.startsWith('506')) return 'Costa Rica';
+  if (p.startsWith('507')) return 'Panama';
+
+  // Prefijos de 2 dígitos
+  if (p.startsWith('57')) return 'Colombia';
+  if (p.startsWith('52')) return 'Mexico';
+  if (p.startsWith('54')) return 'Argentina';
+  if (p.startsWith('56')) return 'Chile';
+  if (p.startsWith('51')) return 'Peru';
+  if (p.startsWith('58')) return 'Venezuela';
+  if (p.startsWith('34')) return 'España';
+  if (p.startsWith('55')) return 'Brasil';
+  if (p.startsWith('39')) return 'Italia';
+  if (p.startsWith('49')) return 'Alemania';
+  if (p.startsWith('33')) return 'Francia';
+  if (p.startsWith('44')) return 'Reino Unido';
+
+  // Prefijos de 1 dígito / Caribe NANP
+  if (p.startsWith('1809') || p.startsWith('1829') || p.startsWith('1849')) return 'Rep Dominicana';
+  if (p.startsWith('1787') || p.startsWith('1939')) return 'Puerto Rico';
+  if (p.startsWith('1')) return 'EEUU';
 
   return null;
 }
