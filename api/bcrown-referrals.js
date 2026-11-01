@@ -104,6 +104,7 @@ function parseBcrownMessage(text) {
   // Debe contener indicios del sistema de asignación de BCROWN
   const isBcrownAssignment = text.includes('se ha registrado una nueva asignación') || 
                              text.includes('bcrown.online/w/') ||
+                             text.includes('bcrown.online/presentacion') ||
                              (text.includes('System BCROWN') && text.includes('Nombre:'));
 
   if (!isBcrownAssignment) return null;
@@ -116,8 +117,8 @@ function parseBcrownMessage(text) {
   const phoneMatch = text.match(/(?:📲\s*WhatsApp|📱\s*WhatsApp|WhatsApp):\s*(\+?[\d\s-]+)/i);
   const phone = phoneMatch ? phoneMatch[1].replace(/[\s-]/g, '').trim() : null;
 
-  // Extraer Enlace personal de presentación
-  const linkMatch = text.match(/(https?:\/\/bcrown\.online\/w\/[a-zA-Z0-9_-]+)/i);
+  // Extraer Enlace personal de presentación (soporta formato /w/ y /presentacion/?p=)
+  const linkMatch = text.match(/(https?:\/\/bcrown\.online\/(?:w\/[a-zA-Z0-9_-]+|presentacion\/\?p=[a-zA-Z0-9_-]+))/i);
   const link = linkMatch ? linkMatch[1].trim() : null;
 
   // Extraer Contactos disponibles
