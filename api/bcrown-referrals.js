@@ -122,6 +122,16 @@ module.exports = async (req, res) => {
         return res.status(200).json({ status: 'ok', mailResults });
       }
 
+      // A0. Si viene un correo de visualización de BCROWN directo
+      const emailRaw = body.email_text || body.email_body;
+      if (emailRaw) {
+        const parsedEmail = parsePresentationEmail(emailRaw);
+        if (parsedEmail) {
+          const emailRes = await processPresentationEmail(parsedEmail);
+          return res.status(200).json({ status: 'ok', emailResult: emailRes });
+        }
+      }
+
       const processedItems = [];
 
       // A. Extraer textos directos del payload
@@ -193,6 +203,16 @@ async function processSingleMessage(text) {
                        (text.includes('System BCROWN') && text.includes('Nombre:'));
   if (isAssignment) {
     return await handleAssignmentMessage(text);
+  }
+
+  // 3. ¿Es un aviso de Visualización de Presentación?
+  const isViewAlert = (text.includes('Presentación de Negocio') || text.includes('presentación de negocio')) &&
+                      (text.includes('Vio el') || text.includes('minuto') || text.includes('WhatsApp:'));
+  if (isViewAlert) {
+    const parsedEmail = parsePresentationEmail(text);
+    if (parsedEmail) {
+      return await processPresentationEmail(parsedEmail);
+    }
   }
 
   return null;
@@ -1017,4 +1037,132 @@ async function syncPresentationViewsFromMail(limit = 100) {
     console.error('[Bcrown] Error sincronizando vistas desde correo:', err.message);
     return [];
   }
+}
+
+/**
+ * Parsea el contenido o HTML de un correo de visualización de BCROWN
+ */
+function parsePresentationEmail(text) {
+  if (!text || typeof text !== 'string') return null;
+
+  // Limpiar posibles etiquetas HTML si vinieran del correo
+  const clean = text.replace(/<[^>]+>/g, ' ');
+
+  // 1. Extraer teléfono de WhatsApp
+  const phoneMatch = clean.match(/WhatsApp:\s*(\+?[\d\s-]+)/i);
+  const phone = phoneMatch ? phoneMatch[1].replace(/[\s-]/g, '').trim() : null;
+
+  // 2. Extraer nombre del prospecto
+  const nameMatch = clean.match(/(?:Tu prospecto\s+)?([^\n\r\.]+?)\s+(?:vio|entró de nuevo a)\s+la Presentación de Negocio/i) ||
+                    clean.match(/Tu prospecto\s+([^\n\r]+?)\s+(?:vio|entró de nuevo)/i);
+  const name = nameMatch ? nameMatch[1].trim() : null;
+
+  // 3. Extraer porcentaje
+  const percentMatch = clean.match(/Vio el\s*(\d+%)\s*de la presentación/i);
+  const percent = percentMatch ? percentMatch[1].trim() : null;
+
+  // 4. Extraer minuto / duración
+  const minuteMatch = clean.match(/Llegó hasta el\s*(minuto\s*\d+\s*de\s*\d+|\d+\s*de\s*\d+|final)/i);
+  const minuteStr = minuteMatch ? minuteMatch[1].trim() : null;
+
+  // Formatear campo "Tiempo visto presentacion"
+  let tiempoVisto = null;
+  if (percent && minuteStr) {
+    tiempoVisto = `${percent} (${minuteStr})`;
+  } else if (percent) {
+    tiempoVisto = percent;
+  } else if (minuteStr) {
+    tiempoVisto = minuteStr;
+  }
+
+  // 5. ¿Es reingreso?
+  const isRepeat = /entró de nuevo/i.test(clean);
+
+  // 6. Preregistro
+  const hasPreregistro = /ya hizo su preregistro/i.test(clean);
+
+  if (!phone && !name) return null;
+
+  return {
+    name,
+    phone,
+    percent,
+    minuteStr,
+    tiempoVisto,
+    isRepeat,
+    hasPreregistro
+  };
+}
+
+/**
+ * Procesa la visualización de presentación recibida por correo y actualiza el lead en Kommo
+ */
+async function processPresentationEmail(parsed) {
+  const { name, phone, tiempoVisto, isRepeat, percent, minuteStr, hasPreregistro } = parsed;
+
+  console.log(`[Bcrown Email] Procesando visualización para: ${name} (${phone}) - Tiempo: ${tiempoVisto}`);
+
+  // Buscar lead existente por teléfono o nombre
+  const existingLead = await findExistingLead({ phone, name });
+  if (!existingLead) {
+    console.warn(`[Bcrown Email] No se encontró lead para ${name} (${phone}) en embudo MLM`);
+    return { action: 'lead_not_found', name, phone };
+  }
+
+  const currentEnum = existingLead.custom_fields_values?.find(cf => cf.field_id === VIO_PRESENTACION_FIELD_ID)?.values?.[0]?.enum_id;
+  const currentTags = existingLead._embedded?.tags || [];
+  const hasTag = currentTags.some(t => t.name === 'Abrio Presentacion');
+
+  const targetEnum = (isRepeat || currentEnum === ENUM_VIO_1_VEZ || currentEnum === ENUM_VIO_MAS_DE_UNA) 
+    ? ENUM_VIO_MAS_DE_UNA 
+    : ENUM_VIO_1_VEZ;
+
+  const customFieldsToPatch = [
+    {
+      field_id: VIO_PRESENTACION_FIELD_ID,
+      values: [{ enum_id: targetEnum }]
+    }
+  ];
+
+  if (tiempoVisto) {
+    customFieldsToPatch.push({
+      field_id: TIEMPO_VISTO_FIELD_ID,
+      values: [{ value: tiempoVisto }]
+    });
+  }
+
+  const updatedTags = currentTags.map(t => ({ name: t.name }));
+  if (!hasTag) updatedTags.push({ name: 'Abrio Presentacion' });
+
+  // Actualizar lead
+  await patchLeads([
+    {
+      id: existingLead.id,
+      custom_fields_values: customFieldsToPatch,
+      _embedded: {
+        tags: updatedTags
+      }
+    }
+  ]);
+
+  // Agregar nota interna
+  const noteText = `🎬 Visualización de Presentación ORAYON detectada:\n` +
+                   `• Tiempo visto: ${tiempoVisto || 'Registrado'}\n` +
+                   `• Frecuencia: ${targetEnum === ENUM_VIO_MAS_DE_UNA ? 'Entró más de una vez' : 'Primera visualización'}\n` +
+                   `• Preregistro en BCROWN: ${hasPreregistro ? 'Sí, ya realizado' : 'Aún no ha hecho preregistro'}`;
+  await addLeadNote(existingLead.id, noteText);
+
+  // Si vio el 50% o más de la presentación, generar tarea urgente para Cristina
+  const percentNum = percent ? parseInt(percent.replace(/[^\d]/g, ''), 10) : 0;
+  if (percentNum >= 50) {
+    await createUrgentTask(existingLead.id, `🔥 Prospecto vio el ${percent} de la presentación. ¡Escribirle por WhatsApp ahora que tiene la información fresca!`);
+  }
+
+  return {
+    action: 'lead_updated',
+    leadId: existingLead.id,
+    name: existingLead.name,
+    viewsStatus: targetEnum === ENUM_VIO_MAS_DE_UNA ? 'Si mas de una' : 'Si 1 vez',
+    tiempoVisto
+  };
 }
