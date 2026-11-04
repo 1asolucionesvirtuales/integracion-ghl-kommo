@@ -52,6 +52,27 @@ const ASESOR_FIELD_ID = 1050637;                // Asesor responsable (text)
 const RESPONSIBLE_USER_ID = 7306169;            // Cristina Orozco
 const PRIMARY_TALK_ID = 12486;                  // Chat con Bcrown CB (+573013861474)
 
+// Memoria caché para evitar carreras de webhooks concurrentes procesando el mismo mensaje
+const recentFingerprints = new Map();
+
+function isRecentlyProcessed(fingerprint) {
+  if (!fingerprint) return false;
+  const now = Date.now();
+  // Limpiar entradas mayores a 2 minutos
+  for (const [key, ts] of recentFingerprints.entries()) {
+    if (now - ts > 120000) recentFingerprints.delete(key);
+  }
+  if (recentFingerprints.has(fingerprint)) {
+    return true;
+  }
+  recentFingerprints.set(fingerprint, now);
+  return false;
+}
+
+// Caché en memoria de leads del embudo para no saturar rate limit
+let leadsCache = null;
+let leadsCacheTime = 0;
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -62,7 +83,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // 1. GET: Ejecutar escaneo completo de mensajes
+    // 1. GET: Reconciliación / escaneo bajo demanda manual
     if (req.method === 'GET') {
       const results = await scanAndProcessTalk(PRIMARY_TALK_ID);
       return res.status(200).json({
@@ -87,29 +108,37 @@ module.exports = async (req, res) => {
 
       const processedItems = [];
 
-      // A. Extraer textos directos del payload si vienen incluidos
+      // A. Extraer textos directos del payload
       const directTexts = extractDirectTextsFromPayload(body);
-      for (const text of directTexts) {
-        const itemRes = await processSingleMessage(text);
-        if (itemRes) processedItems.push(itemRes);
+      if (directTexts.length > 0) {
+        for (const text of directTexts) {
+          const itemRes = await processSingleMessage(text);
+          if (itemRes) processedItems.push(itemRes);
+        }
+        return res.status(200).json({
+          status: 'ok',
+          directProcessed: processedItems
+        });
       }
 
-      // B. Extraer IDs de talks del webhook y escanear mensajes recientes
-      const talkIds = extractTalkIdsFromPayload(body);
-      if (!talkIds.includes(PRIMARY_TALK_ID)) {
-        talkIds.push(PRIMARY_TALK_ID);
-      }
-
-      const scanResults = [];
-      for (const tId of talkIds) {
-        const r = await scanAndProcessTalk(tId);
-        scanResults.push({ talkId: tId, ...r });
+      // B. Si NO vinieron textos directos, verificar si vino un talk explícito en el webhook
+      // Consultar únicamente los últimos 3 mensajes de esa conversación (NUNCA escaneo masivo de 100 mensajes en webhook)
+      const talkIds = extractTalkIdsFromPayload(body, false);
+      if (talkIds.length > 0) {
+        const scanResults = [];
+        for (const tId of talkIds) {
+          const r = await fetchRecentTalkMessagesAndProcess(tId, 3);
+          scanResults.push({ talkId: tId, ...r });
+        }
+        return res.status(200).json({
+          status: 'ok',
+          talkScan: scanResults
+        });
       }
 
       return res.status(200).json({
         status: 'ok',
-        directProcessed: processedItems,
-        talkScan: scanResults
+        message: 'Webhook recibido sin mensajes pendientes de procesar.'
       });
     }
 
@@ -126,6 +155,13 @@ module.exports = async (req, res) => {
  */
 async function processSingleMessage(text) {
   if (!text || typeof text !== 'string') return null;
+
+  // Fingerprint deduplicador para evitar ejecuciones concurrentes del mismo texto en ventana de 2 minutos
+  const cleanKey = text.replace(/\s+/g, ' ').trim();
+  if (isRecentlyProcessed(cleanKey)) {
+    console.log('[Bcrown] Mensaje ignorado por deduplicador en memoria (procesado recientemente).');
+    return { action: 'ignored_duplicate_request', textSnippet: cleanKey.substring(0, 40) };
+  }
 
   // 1. ¿Es un Pre-registro?
   const isPreregistro = text.includes('Nuevo preregistro recibido') || 
@@ -488,10 +524,13 @@ function mapExperienciaToEnum(exp) {
 }
 
 /**
- * Busca si ya existe un lead por slug, link, teléfono o nombre
+ * Obtiene los leads del embudo con caché en memoria (20s) y control estricto de errores
  */
-async function findExistingLead({ phone, link, slug, name }) {
-  const cleanDigits = phone ? phone.replace(/[^\d]/g, '') : null;
+async function getPipelineLeads(forceFresh = false) {
+  const now = Date.now();
+  if (!forceFresh && leadsCache && (now - leadsCacheTime) < 20000) {
+    return leadsCache;
+  }
 
   const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads?filter[pipeline_id]=${TARGET_PIPELINE_ID}&with=contacts&limit=250`;
   const res = await fetch(url, {
@@ -501,9 +540,29 @@ async function findExistingLead({ phone, link, slug, name }) {
     }
   });
 
-  if (!res.ok || res.status === 204) return null;
+  if (res.status === 204) {
+    leadsCache = [];
+    leadsCacheTime = now;
+    return [];
+  }
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Error consultando leads en Kommo CRM: HTTP ${res.status} - ${errorText}`);
+  }
+
   const data = await res.json();
-  const leads = data._embedded?.leads || [];
+  leadsCache = data._embedded?.leads || [];
+  leadsCacheTime = now;
+  return leadsCache;
+}
+
+/**
+ * Busca si ya existe un lead por slug, link, teléfono o nombre
+ */
+async function findExistingLead({ phone, link, slug, name }) {
+  const cleanDigits = phone ? phone.replace(/[^\d]/g, '') : null;
+  const leads = await getPipelineLeads();
 
   for (const lead of leads) {
     const cfValues = lead.custom_fields_values || [];
@@ -585,7 +644,7 @@ function extractDirectTextsFromPayload(body) {
 /**
  * Extrae IDs de conversación de los payloads de Kommo
  */
-function extractTalkIdsFromPayload(body) {
+function extractTalkIdsFromPayload(body, includeDefault = false) {
   const ids = new Set();
 
   if (body.talk_id || body.talkId || body.id) {
@@ -621,12 +680,48 @@ function extractTalkIdsFromPayload(body) {
     }
   }
 
-  ids.add(PRIMARY_TALK_ID);
+  if (includeDefault) {
+    ids.add(PRIMARY_TALK_ID);
+  }
   return Array.from(ids).filter(Boolean);
 }
 
 /**
- * Escanea los mensajes de un Talk y procesa tanto Asignaciones como Pre-registros
+ * Consulta únicamente los mensajes más recientes de un Talk (para webhooks sin texto directo)
+ */
+async function fetchRecentTalkMessagesAndProcess(talkId, limit = 3) {
+  const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/talks/${talkId}/messages?limit=${limit}`;
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${KOMMO_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (!res.ok || res.status === 204) {
+    return { messagesScanned: 0, processed: [] };
+  }
+
+  const data = await res.json();
+  const messages = data._embedded?.messages || [];
+  const processedList = [];
+
+  for (const msg of messages) {
+    if (msg.text) {
+      const r = await processSingleMessage(msg.text);
+      if (r) processedList.push(r);
+    }
+  }
+
+  return {
+    messagesScanned: messages.length,
+    processedCount: processedList.length,
+    processed: processedList
+  };
+}
+
+/**
+ * Escanea los mensajes de un Talk y procesa tanto Asignaciones como Pre-registros (escaneo completo manual)
  */
 async function scanAndProcessTalk(talkId) {
   const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/talks/${talkId}/messages?limit=100`;
@@ -647,7 +742,7 @@ async function scanAndProcessTalk(talkId) {
   const processedList = [];
 
   for (const msg of messages) {
-    if (msg.type !== 'incoming' && msg.message_type !== 'text') continue;
+    if (!msg.text) continue;
     const r = await processSingleMessage(msg.text);
     if (r) processedList.push(r);
   }
@@ -663,6 +758,7 @@ async function scanAndProcessTalk(talkId) {
  * Actualiza leads vía PATCH /api/v4/leads
  */
 async function patchLeads(payload) {
+  leadsCache = null; // Invalidar caché
   const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads`;
   const res = await fetch(url, {
     method: 'PATCH',
@@ -685,6 +781,7 @@ async function patchLeads(payload) {
  * Crea leads complejos vía POST /api/v4/leads/complex
  */
 async function createComplexLeads(payload) {
+  leadsCache = null; // Invalidar caché
   const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads/complex`;
   const res = await fetch(url, {
     method: 'POST',
