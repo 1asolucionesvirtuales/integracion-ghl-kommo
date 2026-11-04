@@ -51,6 +51,14 @@ const DUDA_FIELD_ID = 1055112;                  // Duda (text)
 const ASESOR_FIELD_ID = 1050637;                // Asesor responsable (text)
 const RESPONSIBLE_USER_ID = 7306169;            // Cristina Orozco
 const PRIMARY_TALK_ID = 12486;                  // Chat con Bcrown CB (+573013861474)
+const CRISTINA_CONTACT_ID = 10039810;           // Contacto de Cristina Orozco (buzón de correos reenviados)
+
+// Campos de visualización de presentación (alertas de correo)
+const VIO_PRESENTACION_FIELD_ID = 1055114;       // Vio la presentacion (select)
+const ENUM_VIO_1_VEZ = 618652;                  // "Si 1 vez"
+const ENUM_VIO_MAS_DE_UNA = 618654;             // "Si mas de una"
+const ENUM_VIO_NO = 618656;                     // "No"
+const TIEMPO_VISTO_FIELD_ID = 1055116;          // Tiempo visto presentacion (text)
 
 // Memoria caché para evitar carreras de webhooks concurrentes procesando el mismo mensaje
 const recentFingerprints = new Map();
@@ -83,13 +91,15 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // 1. GET: Reconciliación / escaneo bajo demanda manual
+    // 1. GET: Reconciliación / escaneo bajo demanda manual (Talk WhatsApp + Correos de Presentación)
     if (req.method === 'GET') {
-      const results = await scanAndProcessTalk(PRIMARY_TALK_ID);
+      const talkResults = await scanAndProcessTalk(PRIMARY_TALK_ID);
+      const mailResults = await syncPresentationViewsFromMail(100);
       return res.status(200).json({
         status: 'ok',
-        message: 'Escaneo y sincronización de referidos y pre-registros BCROWN completado.',
-        results
+        message: 'Escaneo y sincronización completados (WhatsApp + Correos de Presentación).',
+        talkResults,
+        mailResults
       });
     }
 
@@ -105,6 +115,12 @@ module.exports = async (req, res) => {
       }
 
       console.log('[Bcrown Webhook] Payload entrante:', JSON.stringify(body));
+
+      // Si se solicita sincronización explícita de correos
+      if (body.action === 'sync_mail' || req.query?.action === 'sync_mail') {
+        const mailResults = await syncPresentationViewsFromMail(100);
+        return res.status(200).json({ status: 'ok', mailResults });
+      }
 
       const processedItems = [];
 
@@ -897,4 +913,108 @@ function detectCountryFromPhone(phone) {
   if (p.startsWith('1')) return 'EEUU';
 
   return null;
+}
+
+/**
+ * Sincroniza aperturas de presentación a partir de los correos recibidos en Kommo (Contacto de Cristina)
+ */
+async function syncPresentationViewsFromMail(limit = 100) {
+  try {
+    const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts/${CRISTINA_CONTACT_ID}/notes?limit=${limit}`;
+    const res = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${KOMMO_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!res.ok || res.status === 204) return [];
+
+    const data = await res.json();
+    const notes = data._embedded?.notes || [];
+
+    // Filtrar notas de correo de BCROWN sobre visualización de presentación
+    const viewEvents = [];
+    for (const n of notes) {
+      if (n.note_type !== 'amomail_message') continue;
+      const subj = n.params?.subject || '';
+      const match = subj.match(/Tu prospecto\s+(.+?)\s+(?:vio la presentaci|entr.+?de nuevo)/i);
+      if (match) {
+        const name = match[1].trim();
+        const isRepeat = /entr.+?de nuevo/i.test(subj);
+        viewEvents.push({
+          name,
+          isRepeat,
+          subject: subj,
+          noteId: n.id,
+          createdAt: n.created_at
+        });
+      }
+    }
+
+    if (viewEvents.length === 0) return [];
+
+    // Agrupar por prospecto para determinar si vio 1 vez o más de una
+    const grouped = {};
+    for (const ev of viewEvents) {
+      const key = ev.name.toLowerCase();
+      if (!grouped[key]) {
+        grouped[key] = { name: ev.name, count: 0, hasRepeat: false, latestEvent: ev };
+      }
+      grouped[key].count++;
+      if (ev.isRepeat) grouped[key].hasRepeat = true;
+    }
+
+    const leads = await getPipelineLeads(true);
+    const updated = [];
+
+    for (const key of Object.keys(grouped)) {
+      const item = grouped[key];
+      const targetEnum = (item.hasRepeat || item.count > 1) ? ENUM_VIO_MAS_DE_UNA : ENUM_VIO_1_VEZ;
+
+      // Buscar lead por nombre
+      const matchedLead = leads.find(l => l.name && l.name.trim().toLowerCase() === key);
+      if (!matchedLead) continue;
+
+      // Verificar si ya tiene el enum y tag correspondientes
+      const currentEnum = matchedLead.custom_fields_values?.find(cf => cf.field_id === VIO_PRESENTACION_FIELD_ID)?.values?.[0]?.enum_id;
+      const currentTags = matchedLead._embedded?.tags || [];
+      const hasTag = currentTags.some(t => t.name === 'Abrio Presentacion');
+
+      if (currentEnum === targetEnum && hasTag) {
+        continue; // Ya está al día
+      }
+
+      // Preparar tags
+      const updatedTags = currentTags.map(t => ({ name: t.name }));
+      if (!hasTag) updatedTags.push({ name: 'Abrio Presentacion' });
+
+      // Actualizar lead
+      await patchLeads([
+        {
+          id: matchedLead.id,
+          custom_fields_values: [
+            {
+              field_id: VIO_PRESENTACION_FIELD_ID,
+              values: [{ enum_id: targetEnum }]
+            }
+          ],
+          _embedded: {
+            tags: updatedTags
+          }
+        }
+      ]);
+
+      updated.push({
+        leadId: matchedLead.id,
+        name: matchedLead.name,
+        viewsStatus: targetEnum === ENUM_VIO_MAS_DE_UNA ? 'Si mas de una' : 'Si 1 vez'
+      });
+    }
+
+    return updated;
+  } catch (err) {
+    console.error('[Bcrown] Error sincronizando vistas desde correo:', err.message);
+    return [];
+  }
 }
