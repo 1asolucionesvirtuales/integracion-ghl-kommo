@@ -1053,16 +1053,17 @@ function parsePresentationEmail(text) {
   const phone = phoneMatch ? phoneMatch[1].replace(/[\s-]/g, '').trim() : null;
 
   // 2. Extraer nombre del prospecto
-  const nameMatch = clean.match(/(?:Tu prospecto\s+)?([^\n\r\.]+?)\s+(?:vio|entró de nuevo a)\s+la Presentación de Negocio/i) ||
-                    clean.match(/Tu prospecto\s+([^\n\r]+?)\s+(?:vio|entró de nuevo)/i);
+  const nameMatch = clean.match(/(?:Tu prospecto\s+)?([^\n\r\.]+?)\s+(?:vio|entr[oó]\s+de\s+nuevo\s+a)\s+la\s+Presentaci[oó]n/i) ||
+                    clean.match(/Tu\s+prospecto\s+([^\n\r]+?)\s+(?:vio|entr[oó])/i);
   const name = nameMatch ? nameMatch[1].trim() : null;
 
   // 3. Extraer porcentaje
-  const percentMatch = clean.match(/Vio el\s*(\d+%)\s*de la presentación/i);
+  const percentMatch = clean.match(/Vio el\s*(\d+%)/i) || clean.match(/(\d+%)\s*de la presentaci/i);
   const percent = percentMatch ? percentMatch[1].trim() : null;
 
   // 4. Extraer minuto / duración
-  const minuteMatch = clean.match(/Llegó hasta el\s*(minuto\s*\d+\s*de\s*\d+|\d+\s*de\s*\d+|final)/i);
+  const minuteMatch = clean.match(/Lleg[oó]\s+hasta\s+el\s+(minuto\s*\d+\s*de\s*\d+|\d+\s*de\s*\d+|final)/i) ||
+                      clean.match(/(minuto\s*\d+\s*de\s*\d+)/i);
   const minuteStr = minuteMatch ? minuteMatch[1].trim() : null;
 
   // Formatear campo "Tiempo visto presentacion"
@@ -1076,7 +1077,7 @@ function parsePresentationEmail(text) {
   }
 
   // 5. ¿Es reingreso?
-  const isRepeat = /entró de nuevo/i.test(clean);
+  const isRepeat = /entr[oó]\s+de\s+nuevo/i.test(clean);
 
   // 6. Preregistro
   const hasPreregistro = /ya hizo su preregistro/i.test(clean);
