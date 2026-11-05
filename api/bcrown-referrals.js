@@ -46,7 +46,10 @@ const EXPERIENCIA_MLM_FIELD_ID = 1054542;       // Experiencia MLM (select)
 const ENUM_EXPERIENCIA_SI = 618644;             // "Si"
 const ENUM_EXPERIENCIA_NO = 618646;             // "No"
 
-const DISPONIBILIDAD_FIELD_ID = 1055110;        // Disponibilidad (text)
+const DISPONIBILIDAD_FIELD_ID = 1055110;        // Disponibilidad (text anterior)
+const CUANDO_QUIERE_EMPEZAR_FIELD_ID = 1055118; // Cuando quiere empezar (select nuevo)
+const ENUM_EMPEZAR_AHORA_MISMO = 618670;       // "ahora mismo"
+const ENUM_EMPEZAR_DUDAS = 618672;             // "estas interesado/a, pero quieres resolver algunas dudas"
 const DUDA_FIELD_ID = 1055112;                  // Duda (text)
 const ASESOR_FIELD_ID = 1050637;                // Asesor responsable (text)
 const RESPONSIBLE_USER_ID = 7306169;            // Cristina Orozco
@@ -191,7 +194,7 @@ async function processSingleMessage(text) {
 
   // 1. ¿Es un Pre-registro?
   const isPreregistro = text.includes('Nuevo preregistro recibido') || 
-                        (text.includes('Sistema BCROWN ORAYON') && text.includes('Duda:'));
+                        (text.includes('Sistema BCROWN ORAYON') && (text.includes('Duda:') || text.includes('Disponibilidad:') || text.includes('Perfil:')));
   if (isPreregistro) {
     return await handlePreregistroMessage(text);
   }
@@ -235,6 +238,7 @@ async function handlePreregistroMessage(text) {
   // Mapear opciones
   const perfilEnum = mapPerfilToEnum(perfil);
   const experienciaEnum = mapExperienciaToEnum(experiencia);
+  const disponibilidadEnum = mapDisponibilidadToEnum(disponibilidad);
   const targetStage = mapPerfilToStage(perfil);
   const countryTag = detectCountryFromPhone(phone);
 
@@ -254,14 +258,6 @@ async function handlePreregistroMessage(text) {
       values: [{ enum_id: experienciaEnum }]
     },
     {
-      field_id: DISPONIBILIDAD_FIELD_ID,
-      values: [{ value: disponibilidad || '' }]
-    },
-    {
-      field_id: DUDA_FIELD_ID,
-      values: [{ value: duda || '' }]
-    },
-    {
       field_id: REGISTRATION_LINK_FIELD_ID,
       values: [{ value: chatDirecto || '' }]
     },
@@ -270,6 +266,25 @@ async function handlePreregistroMessage(text) {
       values: [{ enum_id: ENUM_ESTADO_PREREGISTRO }]
     }
   ];
+
+  if (disponibilidadEnum) {
+    customFieldsToSet.push({
+      field_id: CUANDO_QUIERE_EMPEZAR_FIELD_ID,
+      values: [{ enum_id: disponibilidadEnum }]
+    });
+  }
+  if (disponibilidad) {
+    customFieldsToSet.push({
+      field_id: DISPONIBILIDAD_FIELD_ID,
+      values: [{ value: disponibilidad }]
+    });
+  }
+  if (duda) {
+    customFieldsToSet.push({
+      field_id: DUDA_FIELD_ID,
+      values: [{ value: duda }]
+    });
+  }
 
   let leadId = null;
 
@@ -346,20 +361,29 @@ async function handlePreregistroMessage(text) {
 
   if (leadId) {
     // 1. Agregar nota interna de alta visibilidad
+    const dispText = disponibilidadEnum === ENUM_EMPEZAR_AHORA_MISMO 
+      ? 'Ahora mismo (Sin dudas)' 
+      : (disponibilidadEnum === ENUM_EMPEZAR_DUDAS ? 'Interesado/a, pero quiere resolver dudas' : (disponibilidad || 'No especificado'));
+    
     const noteText = `🚨 NUEVO PREREGISTRO RECIBIDO (ALTA INTENCIÓN)\n` +
       `- Nombre: ${name}\n` +
       `- WhatsApp: ${phone}\n` +
       `- Perfil: ${perfil}\n` +
-      `- Disponibilidad: ${disponibilidad}\n` +
-      `- Duda: ${duda}\n` +
+      `- Cuándo quiere empezar: ${dispText}\n` +
+      (duda ? `- Duda registrada: ${duda}\n` : `- Sin dudas registradas\n`) +
       `- Experiencia MLM: ${experiencia}\n` +
       `- Chat directo: ${chatDirecto}\n` +
       `- Estado: Pre registro`;
     
     await addLeadNote(leadId, noteText);
 
-    // 2. Crear tarea urgente para Cristina Orozco
-    const taskText = `🔥 ALERTA PREREGISTRO: ${name} (${perfil}). Duda: ${duda || 'Sin duda registrada'}. Disponibilidad: ${disponibilidad || 'Inmediata'}.`;
+    // 2. Crear tarea urgente para Cristina Orozco según intención
+    let taskText = '';
+    if (disponibilidadEnum === ENUM_EMPEZAR_AHORA_MISMO) {
+      taskText = `🚀 ALERTA PREREGISTRO: ${name} (${perfil}) quiere iniciar AHORA MISMO (Sin dudas). ¡Enviar bienvenida y enlace de activación!`;
+    } else {
+      taskText = `⚡ ALERTA PREREGISTRO: ${name} (${perfil}) tiene dudas: "${duda || 'Resolver dudas'}". ¡Invitar a videollamada de 10 min o responder por WhatsApp!`;
+    }
     await createUrgentTask(leadId, taskText);
   }
 
@@ -546,6 +570,21 @@ function mapPerfilToStage(perfil) {
     return STAGE_INTEREST_AI_TOOLS; // 113584011
   }
   return STAGE_INTEREST_FRANCHISE; // 113584007
+}
+
+/**
+ * Mapea disponibilidad / cuando quiere empezar al nuevo campo select (1055118)
+ */
+function mapDisponibilidadToEnum(disp) {
+  if (!disp || typeof disp !== 'string') return null;
+  const d = disp.toLowerCase();
+  if (d.includes('ahora mismo') || d.includes('inmediato') || d.includes('ya')) {
+    return ENUM_EMPEZAR_AHORA_MISMO; // 618670 ("ahora mismo")
+  }
+  if (d.includes('duda') || d.includes('interesad') || d.includes('resolver') || d.includes('pregunta')) {
+    return ENUM_EMPEZAR_DUDAS; // 618672 ("estas interesado/a, pero quieres resolver algunas dudas")
+  }
+  return null;
 }
 
 /**
