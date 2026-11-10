@@ -1273,7 +1273,9 @@ function extractAppointmentData(payload) {
     ''
   ).toLowerCase().trim();
 
-  return { id, calendarId, startTimeUnix, meetingLink, rescheduleLink, notes, detalle, motivo, status };
+  const rescheduledAt = appt.rescheduledAt || payload.rescheduledAt || payload.rescheduled_at || '';
+
+  return { id, calendarId, startTimeUnix, meetingLink, rescheduleLink, notes, detalle, motivo, status, rescheduledAt };
 }
 
 /**
@@ -1537,13 +1539,13 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
     console.log(`Nuevo Lead creado en Kommo: [${leadId}]`);
   }
 
-  // 4. Si el lead es válido, crear la Tarea de Cita en Kommo. Si está descalificado, cerrar tareas previas
+  // 4. Si el lead es válido, gestionar/sincronizar la Tarea de Cita en Kommo. Si está descalificado, cerrar tareas previas
   if (!config.isDisqualified) {
     let taskText = config.taskTitle;
     if (appointmentData.notes) {
       taskText = appointmentData.notes;
     }
-    await createTask(leadId, config.assignedUserId, config.taskTypeId, timestampCita, taskText, headers);
+    await syncAppointmentTask(leadId, config.assignedUserId, config.taskTypeId, timestampCita, taskText, headers);
   } else {
     await completeAppointmentTasks(leadId, headers);
   }
@@ -1555,6 +1557,14 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
   if (config.isDisqualified) {
     noteContent = `🚫 LEAD DESCALIFICADO AUTOMÁTICAMENTE\n• Motivo: ${config.disqualification?.question || 'Inversión en implementación'}\n• Detalle: "${config.disqualification?.answer || 'No quiere invertir en la implementación'}"\n• La cita fue cancelada automáticamente en GoHighLevel.\n• El lead fue movido a la etapa "Lead Perdido" en Kommo (sin notificar por WhatsApp ni crear tareas).`;
   } else {
+    // Detectar si la cita es una reprogramación
+    const existingCitaField = targetLead?.custom_fields_values?.find(f => f.field_id === FIELD_CITAS_SEGUIMIENTO);
+    const prevCitaVal = existingCitaField?.values?.[0]?.value;
+    const isRescheduled = !!(
+      appointmentData.rescheduledAt ||
+      (prevCitaVal && Number(prevCitaVal) !== timestampCita)
+    );
+
     let notesDetailText = appointmentData.notes || 'Ninguna';
     if (appointmentData.detalle && appointmentData.motivo && appointmentData.detalle !== appointmentData.motivo) {
       notesDetailText = `${appointmentData.detalle} (Motivo: ${appointmentData.motivo})`;
@@ -1573,7 +1583,10 @@ async function syncAppointmentWithKommo(contactData, appointmentData, config) {
 
     const rescheduleText = appointmentData.rescheduleLink ? `\n• Enlace de reprogramación directa: ${appointmentData.rescheduleLink}` : '';
     const reactivatedNotice = targetLead?.wasReactivatedFromLost ? '\n• Estado: Lead reactivado automáticamente desde "Lead Perdido" por nuevo agendamiento' : '';
-    noteContent = `📅 Cita agendada desde GoHighLevel (GHL)\n• Fecha/Hora: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}${rescheduleText}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}${reactivatedNotice}`;
+    const headerTitle = isRescheduled ? '🔄 Cita REPROGRAMADA desde GoHighLevel (GHL)' : '📅 Cita agendada desde GoHighLevel (GHL)';
+    const dateLabel = isRescheduled ? 'Nueva Fecha/Hora' : 'Fecha/Hora';
+
+    noteContent = `${headerTitle}\n• ${dateLabel}: ${formattedDate}\n• Enlace de la sala: ${appointmentData.meetingLink || 'No indicado'}${rescheduleText}\n• Tipo: ${config.taskTitle}\n• Asesor: ${config.assignedUserId === USER_IVAN ? 'Ivan Lalinde' : 'Cristina Orozco'}\n• ¿Toma la decisión?: ${decisionText}\n• Invitados en llamada: ${guestsText}\n• Detalle de la cita: ${notesDetailText}${reactivatedNotice}`;
   }
 
   await addNote(leadId, noteContent, headers);
@@ -1785,6 +1798,68 @@ async function findLeadForContact(contactId, pipelineId, headers) {
   } catch (e) {
     console.error('Error buscando lead para contacto:', e);
     return null;
+  }
+}
+
+/**
+ * Crea o sincroniza la tarea de cita en Kommo CRM.
+ * Si ya existe una tarea de cita activa (Demo Kommo, Capacitación o el taskTypeId correspondiente):
+ * - Actualiza la tarea activa existente con la nueva fecha/hora (complete_till), texto y responsable.
+ * - Si existen tareas de cita activas adicionales (duplicadas previas), las completa automáticamente con motivo de reprogramación.
+ * Si no existe ninguna tarea activa previa:
+ * - Crea una nueva tarea de cita.
+ */
+async function syncAppointmentTask(leadId, responsibleUserId, taskTypeId, dueTimestamp, text, headers) {
+  try {
+    const tasksUrl = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/tasks?filter[entity_id]=${leadId}&filter[entity_type]=leads&filter[is_completed]=0`;
+    const tasksRes = await fetch(tasksUrl, { headers });
+
+    let activeAppointmentTasks = [];
+    if (tasksRes.ok) {
+      const tasksData = await tasksRes.json();
+      const allActive = tasksData._embedded?.tasks || [];
+      activeAppointmentTasks = allActive.filter(t =>
+        t.task_type_id === TASK_TYPE_DEMO_KOMMO ||
+        t.task_type_id === TASK_TYPE_CAPACITACION ||
+        t.task_type_id === taskTypeId
+      );
+    }
+
+    if (activeAppointmentTasks.length > 0) {
+      // 1. Actualizar la primera tarea de cita activa con la nueva fecha/hora y responsable
+      const mainTask = activeAppointmentTasks[0];
+      console.log(`[Kommo Tasks] Reprogramación: Actualizando tarea de cita [${mainTask.id}] para lead [${leadId}] a fecha/hora ${dueTimestamp}...`);
+      await fetch(`https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/tasks/${mainTask.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          complete_till: dueTimestamp,
+          text: text,
+          responsible_user_id: responsibleUserId,
+          task_type_id: taskTypeId
+        })
+      });
+
+      // 2. Si existían tareas de cita adicionales (duplicadas previas), completarlas
+      for (let i = 1; i < activeAppointmentTasks.length; i++) {
+        const extraTask = activeAppointmentTasks[i];
+        console.log(`[Kommo Tasks] Cerrando tarea de cita adicional/duplicada [${extraTask.id}] para lead [${leadId}]...`);
+        await fetch(`https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/tasks/${extraTask.id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            is_completed: true,
+            result: { text: 'Cita reprogramada' }
+          })
+        });
+      }
+    } else {
+      // No existe tarea de cita activa previa, crear una nueva
+      console.log(`[Kommo Tasks] Creando nueva tarea de cita para lead [${leadId}]...`);
+      await createTask(leadId, responsibleUserId, taskTypeId, dueTimestamp, text, headers);
+    }
+  } catch (err) {
+    console.error(`Error en syncAppointmentTask para lead [${leadId}]:`, err);
   }
 }
 
