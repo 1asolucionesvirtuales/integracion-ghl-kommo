@@ -1642,7 +1642,7 @@ async function searchContact(phone, email, headers) {
       try {
         const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts?query=${encodeURIComponent(q)}`;
         const res = await fetch(url, { headers });
-        if (res.ok) {
+        if (res.status === 200) {
           const data = await res.json();
           if (data._embedded?.contacts?.length > 0) {
             return data._embedded.contacts[0];
@@ -1658,7 +1658,7 @@ async function searchContact(phone, email, headers) {
     try {
       const url = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/contacts?query=${encodeURIComponent(email)}`;
       const res = await fetch(url, { headers });
-      if (res.ok) {
+      if (res.status === 200) {
         const data = await res.json();
         if (data._embedded?.contacts?.length > 0) {
           return data._embedded.contacts[0];
@@ -1815,7 +1815,7 @@ async function syncAppointmentTask(leadId, responsibleUserId, taskTypeId, dueTim
     const tasksRes = await fetch(tasksUrl, { headers });
 
     let activeAppointmentTasks = [];
-    if (tasksRes.ok) {
+    if (tasksRes.status === 200) {
       const tasksData = await tasksRes.json();
       const allActive = tasksData._embedded?.tasks || [];
       activeAppointmentTasks = allActive.filter(t =>
@@ -1927,7 +1927,7 @@ async function completeAppointmentTasks(leadId, headers) {
   try {
     const tasksUrl = `https://${KOMMO_SUBDOMAIN}.kommo.com/api/v4/tasks?filter[entity_id]=${leadId}&filter[entity_type]=leads&filter[is_completed]=0`;
     const tasksRes = await fetch(tasksUrl, { headers });
-    if (tasksRes.ok) {
+    if (tasksRes.status === 200) {
       const tasksData = await tasksRes.json();
       const activeTasks = tasksData._embedded?.tasks || [];
       for (const t of activeTasks) {
